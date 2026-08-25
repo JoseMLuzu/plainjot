@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f5f0" />
+    <meta name="description" content="PlainJot: notas Markdown locales, sencillas y privadas." />
+    <title>PlainJot</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <header class="brand-row">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true">P</span>
+            <div>
+              <h1>PlainJot</h1>
+              <p>Local y privado</p>
+            </div>
+          </div>
+          <button id="new-note" class="new-note-button" type="button" title="Nueva nota (⌘N)">
+            <span aria-hidden="true">＋</span>
+            <span>Nueva</span>
+          </button>
+        </header>
+
+        <label class="search-box">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5"></circle>
+            <path d="m16 16 4 4"></path>
+          </svg>
+          <input id="search" type="search" placeholder="Buscar notas" autocomplete="off" />
+          <kbd>⌘ K</kbd>
+        </label>
+
+        <div class="list-heading">
+          <span>RECIENTES</span>
+          <span id="note-count" class="note-count">0</span>
+        </div>
+        <div id="notes-list" class="notes-list" aria-live="polite"></div>
+
+        <footer class="sidebar-footer">
+          <div class="folder-caption">
+            <span class="folder-icon" aria-hidden="true">⌑</span>
+            <span title="~/Documents/PlainJot">Documents/PlainJot</span>
+          </div>
+          <button id="refresh" class="round-button" type="button" title="Actualizar desde la carpeta" aria-label="Actualizar desde la carpeta">↻</button>
+        </footer>
+      </aside>
+
+      <section class="workspace">
+        <header class="workspace-header">
+          <div class="sync-state">
+            <span class="sync-dot"></span>
+            <span id="save-status">Todo guardado</span>
+          </div>
+          <div class="global-actions">
+            <button id="theme-toggle" class="toolbar-icon" type="button" title="Cambiar tema" aria-label="Cambiar tema">
+              <span class="theme-light" aria-hidden="true">☼</span>
+              <span class="theme-dark" aria-hidden="true">☾</span>
+            </button>
+          </div>
+        </header>
+
+        <div id="empty-state" class="empty-state">
+          <div class="empty-illustration" aria-hidden="true">
+            <span class="paper paper-back"></span>
+            <span class="paper paper-front"><i></i><i></i><i></i></span>
+          </div>
+          <p class="empty-kicker">TU ESPACIO PERSONAL</p>
+          <h2>Las ideas empiezan aquí.</h2>
+          <p class="empty-copy">Crea una nota o pídele a Codex que guarde un archivo Markdown. Todo permanece en tu computadora.</p>
+          <button id="empty-new-note" class="primary-button" type="button">Crear una nota</button>
+          <span class="shortcut-hint">Presiona <kbd>⌘ N</kbd> en cualquier momento</span>
+        </div>
+
+        <div id="editor" class="editor hidden">
+          <div class="editor-toolbar">
+            <div class="view-switch" role="tablist" aria-label="Vista de la nota">
+              <button id="write-tab" class="view-tab active" type="button" role="tab" aria-selected="true">Escribir</button>
+              <button id="preview-tab" class="view-tab" type="button" role="tab" aria-selected="false">Vista previa</button>
+            </div>
+            <button id="delete-note" class="delete-button" type="button" title="Eliminar nota">
+              <span aria-hidden="true">⌫</span>
+              <span>Eliminar</span>
+            </button>
+          </div>
+
+          <div class="note-document">
+            <input id="note-title" class="title-input" maxlength="200" placeholder="Sin título" aria-label="Título de la nota" />
+            <div class="note-meta">
+              <span id="note-date">Ahora</span>
+              <span aria-hidden="true">•</span>
+              <span id="note-filename">nota.md</span>
+            </div>
+            <textarea id="note-body" class="body-input" placeholder="Empieza a escribir…" spellcheck="true" aria-label="Contenido de la nota"></textarea>
+            <article id="markdown-preview" class="markdown-preview hidden" aria-label="Vista previa de la nota"></article>
+          </div>
+
+          <footer class="editor-footer">
+            <span id="word-count">0 palabras</span>
+            <span>Markdown compatible</span>
+          </footer>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status"></div>
+    <script src="app.js" defer></script>
+  </body>
+</html>
