@@ -14,6 +14,10 @@ All notable changes are documented here. PlainJot follows semantic versioning on
 - CI, release archive tooling, and contributor documentation
 - Native opening and selection of Markdown files inside the PlainJot folder
 
+### Changed
+
+- Existing notes and tasks open in preview, while newly created documents open in write mode
+
 ### Security
 
 - Explicit symlink rejection and optimistic revision checks for external edits

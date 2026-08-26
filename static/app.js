@@ -155,13 +155,13 @@ function renderList() {
   }
 }
 
-async function selectDocument(documentId) {
+async function selectDocument(documentId, { view = "preview", focus = false } = {}) {
   if (state.loadingDocument || documentId === state.selectedId) return;
   await flushSave();
   state.loadingDocument = true;
   try {
     const document = await api(`/api/documents/${encodeURIComponent(documentId)}`);
-    showDocument(document, { focus: true });
+    showDocument(document, { focus, view });
   } catch (error) {
     showToast(error.message);
     await loadCollections();
@@ -175,14 +175,14 @@ async function openDocumentFromSystem(documentId) {
   try {
     const document = await api(`/api/documents/${encodeURIComponent(documentId)}`);
     state.section = document.type === "task" ? (document.status === "inbox" ? "inbox" : "tasks") : "notes";
-    showDocument(document, { focus: true });
+    showDocument(document, { view: "preview" });
     await loadCollections();
   } catch (error) {
     showToast(error.message);
   }
 }
 
-function showDocument(document, { focus = false } = {}) {
+function showDocument(document, { focus = false, view = state.view } = {}) {
   state.current = document;
   state.selectedId = document.id;
   elements.title.value = document.title;
@@ -190,7 +190,7 @@ function showDocument(document, { focus = false } = {}) {
   elements.empty.classList.add("hidden");
   elements.editor.classList.remove("hidden");
   setSaveStatus("Todo guardado");
-  setView("write", { focus: false });
+  setView(view, { focus: false });
   updateEditorStats();
   updateDocumentMetadata();
   updateTaskControls();
@@ -207,7 +207,7 @@ async function createNote() {
     });
     state.section = "notes";
     await loadCollections();
-    await selectDocument(note.id);
+    await selectDocument(note.id, { view: "write", focus: true });
     elements.title.select();
   } catch (error) {
     showToast(error.message);
@@ -223,7 +223,7 @@ async function createTask(status = "inbox") {
     });
     state.section = status === "inbox" ? "inbox" : "tasks";
     await loadCollections();
-    await selectDocument(task.id);
+    await selectDocument(task.id, { view: "write", focus: true });
     elements.title.select();
   } catch (error) {
     showToast(error.message);
