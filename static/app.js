@@ -170,6 +170,18 @@ async function selectDocument(documentId) {
   }
 }
 
+async function openDocumentFromSystem(documentId) {
+  await flushSave();
+  try {
+    const document = await api(`/api/documents/${encodeURIComponent(documentId)}`);
+    state.section = document.type === "task" ? (document.status === "inbox" ? "inbox" : "tasks") : "notes";
+    showDocument(document, { focus: true });
+    await loadCollections();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
 function showDocument(document, { focus = false } = {}) {
   state.current = document;
   state.selectedId = document.id;
@@ -564,6 +576,7 @@ function scheduleFilesystemRefresh() {
 }
 
 window.__plainjotFilesChanged = scheduleFilesystemRefresh;
+window.__plainjotOpenDocument = openDocumentFromSystem;
 
 elements.newItem.addEventListener("click", createForCurrentSection);
 elements.emptyButton.addEventListener("click", createForCurrentSection);

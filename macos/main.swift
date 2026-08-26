@@ -48,6 +48,8 @@ final class NotesBridge: NSObject, WKScriptMessageHandler {
 }
 
 final class NavigationDelegate: NSObject, WKNavigationDelegate {
+    var didFinishNavigation: ((WKWebView) -> Void)?
+
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
@@ -63,6 +65,10 @@ final class NavigationDelegate: NSObject, WKNavigationDelegate {
             return
         }
         decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation?) {
+        didFinishNavigation?(webView)
     }
 }
 
@@ -93,7 +99,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var webView: WKWebView?
     private var bridge: NotesBridge?
+    private var store: PlainJotStore?
     private var directoryWatcher: DirectoryWatcher?
+    private var pendingOpenPaths: [String] = []
+    private var pendingDocumentID: String?
+    private var webInterfaceReady = false
     private let navigationDelegate = NavigationDelegate()
     private let javaScriptDialogDelegate = JavaScriptDialogDelegate()
 
@@ -116,6 +126,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         directoryWatcher?.stop()
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        guard store != nil else {
+            pendingOpenPaths.append(contentsOf: filenames)
+            sender.reply(toOpenOrPrint: .success)
+            return
+        }
+
+        let accepted = queueFirstDocument(from: filenames)
+        sender.reply(toOpenOrPrint: accepted ? .success : .failure)
     }
 
     @objc private func createNewNote(_ sender: Any?) {
@@ -155,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func createWindow() throws {
         let notesDirectory = preferredNotesDirectory()
         let store = try PlainJotStore(directoryURL: notesDirectory)
+        self.store = store
 
         guard
             let webDirectory = Bundle.main.resourceURL?.appendingPathComponent("Web", isDirectory: true),
@@ -179,6 +201,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         webView.navigationDelegate = navigationDelegate
         webView.uiDelegate = javaScriptDialogDelegate
         notesBridge.webView = webView
+        navigationDelegate.didFinishNavigation = { [weak self] _ in
+            self?.webInterfaceReady = true
+            self?.presentPendingDocument()
+        }
         webView.loadFileURL(indexURL, allowingReadAccessTo: webDirectory)
 
         let watcher = DirectoryWatcher(directoryURL: store.directoryURL) { [weak webView] in
@@ -205,6 +231,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bridge = notesBridge
         self.webView = webView
         self.window = window
+
+        if !pendingOpenPaths.isEmpty {
+            let paths = pendingOpenPaths
+            pendingOpenPaths.removeAll()
+            _ = queueFirstDocument(from: paths)
+        }
+    }
+
+    @discardableResult
+    private func queueFirstDocument(from paths: [String]) -> Bool {
+        guard let store else { return false }
+        for path in paths {
+            guard let documentID = try? store.documentID(forOpenedFileURL: URL(fileURLWithPath: path)) else {
+                continue
+            }
+            pendingDocumentID = documentID
+            window?.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            presentPendingDocument()
+            return true
+        }
+        return false
+    }
+
+    private func presentPendingDocument() {
+        guard webInterfaceReady, let documentID = pendingDocumentID, let webView else { return }
+        guard
+            let data = try? JSONSerialization.data(withJSONObject: [documentID]),
+            let json = String(data: data, encoding: .utf8)
+        else { return }
+        pendingDocumentID = nil
+        webView.evaluateJavaScript("window.__plainjotOpenDocument?.(\(json)[0]);")
     }
 
     private func preferredNotesDirectory() -> URL {
@@ -254,6 +312,12 @@ func runSelfTest() throws {
         throw StoreFailure(status: 500, message: "Falló la creación nativa")
     }
     try require(created.status == 201, "Estado incorrecto al crear una nota")
+    let noteURL = testDirectory.appendingPathComponent(noteID)
+    let openedDocumentID = try store.documentID(forOpenedFileURL: noteURL)
+    try require(
+        openedDocumentID == noteID,
+        "No se aceptó un documento abierto desde PlainJot"
+    )
     try requireStoreFailure(status: 400) {
         _ = try store.getDocument("../outside.md")
     }
@@ -263,9 +327,12 @@ func runSelfTest() throws {
     let linkedURL = testDirectory.appendingPathComponent("linked.md")
     try "# Outside\n".write(to: outsideURL, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(at: outsideURL) }
+    try requireStoreFailure(status: 400) {
+        _ = try store.documentID(forOpenedFileURL: outsideURL)
+    }
     try FileManager.default.createSymbolicLink(at: linkedURL, withDestinationURL: outsideURL)
     try requireStoreFailure(status: 400) {
-        _ = try store.getDocument("linked.md")
+        _ = try store.documentID(forOpenedFileURL: linkedURL)
     }
     try FileManager.default.removeItem(at: linkedURL)
 

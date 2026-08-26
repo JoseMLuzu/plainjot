@@ -144,6 +144,14 @@ final class PlainJotStore {
         try dictionary(readDocument(try fileURL(for: documentID)))
     }
 
+    func documentID(forOpenedFileURL fileURL: URL) throws -> String {
+        let candidate = fileURL.standardizedFileURL
+        guard isValidDocumentID(candidate.lastPathComponent) else {
+            throw StoreFailure(status: 400, message: "Nombre de documento no válido")
+        }
+        return try secureExistingURL(candidate).lastPathComponent
+    }
+
     func createNote(title: String, body: String) throws -> [String: Any] {
         let cleanTitle = try cleanTitle(title)
         let documentID = "\(slugify(cleanTitle))-\(UUID().uuidString.lowercased().prefix(7)).md"

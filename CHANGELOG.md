@@ -12,6 +12,7 @@ All notable changes are documented here. PlainJot follows semantic versioning on
 - Dependency-free `plainjot` CLI
 - Reusable Python and Swift filesystem cores
 - CI, release archive tooling, and contributor documentation
+- Native opening and selection of Markdown files inside the PlainJot folder
 
 ### Security
 
