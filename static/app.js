@@ -8,6 +8,8 @@ const state = {
   externalTimer: null,
   loadingDocument: false,
   saving: false,
+  choosingFolder: false,
+  folder: null,
   view: "write",
 };
 
@@ -37,6 +39,8 @@ const elements = {
   taskAction: document.querySelector("#task-action"),
   taskContext: document.querySelector("#task-context"),
   newItem: document.querySelector("#new-item"),
+  folder: document.querySelector("#notes-folder"),
+  folderLabel: document.querySelector("#notes-folder-label"),
   toast: document.querySelector("#toast"),
   themeMeta: document.querySelector('meta[name="theme-color"]'),
 };
@@ -53,6 +57,49 @@ async function api(path, options = {}) {
     throw error;
   }
   return response.status === 204 ? null : response.json();
+}
+
+function updateFolderInfo(folder) {
+  state.folder = folder;
+  elements.folderLabel.textContent = folder.display_path || folder.path;
+  elements.folder.title = folder.can_choose
+    ? `Cambiar carpeta de notas\n${folder.path}`
+    : folder.path;
+}
+
+async function loadFolderInfo() {
+  try {
+    updateFolderInfo(await api("/api/folder"));
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function chooseNotesFolder() {
+  if (state.choosingFolder) return;
+  if (!state.folder?.can_choose) {
+    showToast("Puedes cambiar la carpeta desde la aplicación de macOS.");
+    return;
+  }
+
+  await flushSave();
+  state.choosingFolder = true;
+  elements.folder.disabled = true;
+  try {
+    const folder = await api("/api/folder", { method: "POST", body: "{}" });
+    updateFolderInfo(folder);
+    if (!folder.changed) return;
+    elements.search.value = "";
+    state.section = "notes";
+    clearEditor();
+    await loadCollections({ preserveSelection: false });
+    showToast("Carpeta de notas actualizada");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.choosingFolder = false;
+    elements.folder.disabled = false;
+  }
 }
 
 async function loadCollections({ preserveSelection = true } = {}) {
@@ -580,6 +627,7 @@ window.__plainjotOpenDocument = openDocumentFromSystem;
 
 elements.newItem.addEventListener("click", createForCurrentSection);
 elements.emptyButton.addEventListener("click", createForCurrentSection);
+elements.folder.addEventListener("click", chooseNotesFolder);
 document.querySelector("#delete-note").addEventListener("click", deleteCurrent);
 document.querySelector("#theme-toggle").addEventListener("click", toggleTheme);
 document.querySelector("#refresh").addEventListener("click", async () => {
@@ -625,4 +673,5 @@ window.addEventListener("beforeunload", () => {
 const savedTheme = localStorage.getItem("plainjot-theme") || localStorage.getItem("notas-theme");
 const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 applyTheme(savedTheme || preferredTheme);
+loadFolderInfo();
 loadCollections();

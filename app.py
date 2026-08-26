@@ -32,6 +32,22 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 NotesStore = PlainJotStore
 
 
+def folder_info(notes_dir: Path, *, can_choose: bool = False, changed: bool = False) -> dict:
+    path = notes_dir.expanduser().resolve()
+    home = Path.home().resolve()
+    try:
+        relative = path.relative_to(home)
+        display_path = "~" if not relative.parts else f"~/{relative}"
+    except ValueError:
+        display_path = str(path)
+    return {
+        "path": str(path),
+        "display_path": display_path,
+        "can_choose": can_choose,
+        "changed": changed,
+    }
+
+
 def split_markdown(path: Path, content: str) -> tuple[str, str]:
     title, body, _, _ = parse_markdown(path, content)
     return title, body
@@ -50,6 +66,9 @@ def make_handler(store: PlainJotStore):
             if route == "/api/tasks":
                 self._send_json(store.list_tasks())
                 return
+            if route == "/api/folder":
+                self._send_json(folder_info(store.notes_dir))
+                return
             if route == "/api/search":
                 query = parse_qs(parsed.query).get("q", [""])[0]
                 self._send_json(store.search(query))
@@ -64,6 +83,12 @@ def make_handler(store: PlainJotStore):
 
         def do_POST(self) -> None:
             route = urlparse(self.path).path
+            if route == "/api/folder":
+                self._send_error(
+                    HTTPStatus.METHOD_NOT_ALLOWED,
+                    "Folder selection is available in the native macOS app",
+                )
+                return
             payload = self._read_json()
             if payload is None:
                 return

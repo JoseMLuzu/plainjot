@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import unicodedata
 import uuid
 from dataclasses import dataclass
@@ -185,9 +186,26 @@ def _render_preserving_frontmatter(title: str, body: str, frontmatter_raw: str |
     return f"---\n{frontmatter_raw}\n---\n\n{markdown}" if frontmatter_raw is not None else markdown
 
 
-def default_notes_dir() -> Path:
-    preferred = Path.home() / "Documents" / "PlainJot"
-    legacy = Path.home() / "Documents" / "NotasLocal"
+def default_notes_dir(*, home: Path | None = None, config_file: Path | None = None) -> Path:
+    user_home = (home or Path.home()).expanduser().resolve()
+    if config_file is None:
+        if sys.platform == "darwin":
+            config_file = user_home / "Library" / "Application Support" / "PlainJot" / "config.json"
+        else:
+            config_root = Path(os.environ.get("XDG_CONFIG_HOME", user_home / ".config"))
+            config_file = config_root / "plainjot" / "config.json"
+    try:
+        payload = json.loads(config_file.read_text(encoding="utf-8"))
+        configured = payload.get("notes_directory") if isinstance(payload, dict) else None
+        if isinstance(configured, str) and Path(configured).is_absolute():
+            candidate = Path(configured).resolve()
+            if candidate.is_dir():
+                return candidate
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    preferred = user_home / "Documents" / "PlainJot"
+    legacy = user_home / "Documents" / "NotasLocal"
     if preferred.exists() or not legacy.is_dir():
         return preferred
     try:

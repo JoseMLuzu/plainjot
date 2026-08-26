@@ -4,8 +4,9 @@ import Foundation
 import Darwin
 
 final class NotesBridge: NSObject, WKScriptMessageHandler {
-    private let store: PlainJotStore
+    private var store: PlainJotStore
     weak var webView: WKWebView?
+    var chooseFolder: (() throws -> Bool)?
 
     init(store: PlainJotStore) {
         self.store = store
@@ -25,6 +26,11 @@ final class NotesBridge: NSObject, WKScriptMessageHandler {
         if payload["body"] is NSNull { requestBody = nil }
         else { requestBody = payload["body"] }
 
+        if path == "/api/folder" {
+            handleFolderRequest(id: id, method: method)
+            return
+        }
+
         do {
             let response = try store.route(method: method, path: path, body: requestBody)
             resolve(id: id, status: response.status, body: response.body)
@@ -33,6 +39,46 @@ final class NotesBridge: NSObject, WKScriptMessageHandler {
         } catch {
             resolve(id: id, status: 500, body: ["error": "No se pudo acceder a la carpeta PlainJot"])
         }
+    }
+
+    func replaceStore(_ store: PlainJotStore) {
+        self.store = store
+    }
+
+    private func handleFolderRequest(id: String, method: String) {
+        if method == "GET" {
+            resolve(id: id, status: 200, body: folderInfo(changed: false))
+            return
+        }
+        guard method == "POST" else {
+            resolve(id: id, status: 405, body: ["error": "Método no permitido"])
+            return
+        }
+        guard let chooseFolder else {
+            resolve(id: id, status: 501, body: ["error": "El selector de carpetas no está disponible"])
+            return
+        }
+        do {
+            resolve(id: id, status: 200, body: folderInfo(changed: try chooseFolder()))
+        } catch let failure as StoreFailure {
+            resolve(id: id, status: failure.status, body: ["error": failure.message])
+        } catch {
+            resolve(id: id, status: 500, body: ["error": "No se pudo cambiar la carpeta"])
+        }
+    }
+
+    private func folderInfo(changed: Bool) -> [String: Any] {
+        let path = store.directoryURL.path
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let displayPath = path == home
+            ? "~"
+            : path.hasPrefix(home + "/") ? "~" + String(path.dropFirst(home.count)) : path
+        return [
+            "path": path,
+            "display_path": displayPath,
+            "can_choose": true,
+            "changed": changed,
+        ]
     }
 
     private func resolve(id: String, status: Int, body: Any?) {
@@ -106,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var webInterfaceReady = false
     private let navigationDelegate = NavigationDelegate()
     private let javaScriptDialogDelegate = JavaScriptDialogDelegate()
+    private let configuration = PlainJotConfiguration(fileURL: PlainJotConfiguration.defaultFileURL)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
@@ -191,6 +238,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.addUserScript(WKUserScript(source: bridgeSource, injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         let notesBridge = NotesBridge(store: store)
+        notesBridge.chooseFolder = { [weak self] in
+            guard let self else {
+                throw StoreFailure(status: 500, message: "PlainJot ya no está disponible")
+            }
+            return try self.chooseNotesDirectory()
+        }
         controller.add(notesBridge, name: "notes")
 
         let configuration = WKWebViewConfiguration()
@@ -207,12 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         webView.loadFileURL(indexURL, allowingReadAccessTo: webDirectory)
 
-        let watcher = DirectoryWatcher(directoryURL: store.directoryURL) { [weak webView] in
-            DispatchQueue.main.async {
-                webView?.evaluateJavaScript("window.__plainjotFilesChanged?.();")
-            }
-        }
-        try watcher.start()
+        let watcher = try startDirectoryWatcher(for: store, webView: webView)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1120, height: 760),
@@ -237,6 +285,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pendingOpenPaths.removeAll()
             _ = queueFirstDocument(from: paths)
         }
+    }
+
+    private func chooseNotesDirectory() throws -> Bool {
+        guard let store, let webView else {
+            throw StoreFailure(status: 500, message: "PlainJot todavía no está listo")
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "Seleccionar carpeta de PlainJot"
+        panel.message = "PlainJot leerá y guardará aquí sus archivos Markdown."
+        panel.prompt = "Usar carpeta"
+        panel.directoryURL = store.directoryURL
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+
+        guard panel.runModal() == .OK, let selectedURL = panel.url else { return false }
+        let newStore = try PlainJotStore(directoryURL: selectedURL)
+        guard newStore.directoryURL != store.directoryURL else { return false }
+
+        let newWatcher = try startDirectoryWatcher(for: newStore, webView: webView)
+        do {
+            try configuration.saveNotesDirectory(newStore.directoryURL)
+        } catch {
+            newWatcher.stop()
+            throw error
+        }
+
+        directoryWatcher?.stop()
+        bridge?.replaceStore(newStore)
+        self.store = newStore
+        directoryWatcher = newWatcher
+        return true
+    }
+
+    private func startDirectoryWatcher(for store: PlainJotStore, webView: WKWebView) throws -> DirectoryWatcher {
+        let watcher = DirectoryWatcher(directoryURL: store.directoryURL) { [weak webView] in
+            DispatchQueue.main.async {
+                webView?.evaluateJavaScript("window.__plainjotFilesChanged?.();")
+            }
+        }
+        try watcher.start()
+        return watcher
     }
 
     @discardableResult
@@ -266,6 +358,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func preferredNotesDirectory() -> URL {
+        if let configured = configuration.loadNotesDirectory() {
+            return configured
+        }
         let documents = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents", isDirectory: true)
         let preferred = documents.appendingPathComponent("PlainJot", isDirectory: true)
@@ -301,6 +396,17 @@ func runSelfTest() throws {
     let testDirectory = FileManager.default.temporaryDirectory
         .appendingPathComponent("plainjot-self-test-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: testDirectory) }
+
+    let configuredDirectory = testDirectory.appendingPathComponent("configured", isDirectory: true)
+    try FileManager.default.createDirectory(at: configuredDirectory, withIntermediateDirectories: true)
+    let testConfiguration = PlainJotConfiguration(
+        fileURL: testDirectory.appendingPathComponent("config.json", isDirectory: false)
+    )
+    try testConfiguration.saveNotesDirectory(configuredDirectory)
+    try require(
+        testConfiguration.loadNotesDirectory() == configuredDirectory.resolvingSymlinksInPath(),
+        "No se conservó la carpeta seleccionada"
+    )
 
     let store = try PlainJotStore(directoryURL: testDirectory)
     let created = try store.route(

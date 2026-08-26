@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--notes-dir",
         type=Path,
         default=None,
-        help="PlainJot directory (default: ~/Documents/PlainJot)",
+        help="PlainJot directory (default: the folder selected in the macOS app)",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 

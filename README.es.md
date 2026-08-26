@@ -14,7 +14,7 @@ Una libreta Markdown y bandeja de tareas local-first para humanos y coding agent
 
 > **Files first. Local first. Agent friendly.**
 
-PlainJot es deliberadamente pequeño. No es un workspace, grafo de conocimiento o gestor de proyectos. Los archivos `.md` dentro de `~/Documents/PlainJot` siempre son la fuente de verdad.
+PlainJot es deliberadamente pequeño. No es un workspace, grafo de conocimiento o gestor de proyectos. Los archivos `.md` de la carpeta elegida —`~/Documents/PlainJot` por defecto— siempre son la fuente de verdad.
 
 ## Qué hace
 
@@ -25,6 +25,8 @@ PlainJot tiene tres secciones sencillas:
 - **Tasks** para trabajo pendiente y completado.
 
 La app observa la carpeta PlainJot en macOS, por lo que las creaciones, ediciones, renombres y eliminaciones externas aparecen automáticamente. El guardado automático comprueba revisiones para no sobrescribir silenciosamente una edición externa.
+
+Pulsa la ruta de la esquina inferior izquierda para elegir otra carpeta local. PlainJot la recuerda, reinicia el watcher y comparte la selección con la CLI. Los archivos existentes nunca se mueven automáticamente.
 
 ## Compilar la app para macOS
 
@@ -87,6 +89,8 @@ Otros agentes no necesitan una integración dedicada. Pueden utilizar la CLI o c
 ```text
 ~/Documents/PlainJot
 ```
+
+Esa es la ubicación predeterminada. Si eliges otra carpeta en la app de macOS, usa la ruta mostrada en la esquina inferior izquierda; la CLI `plainjot` seguirá esa selección automáticamente.
 
 Estos flujos dependen únicamente del acceso normal a la terminal y al filesystem. No afirmamos ni requerimos un plugin oficial de Codex o Claude Code.
 

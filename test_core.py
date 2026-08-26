@@ -1,10 +1,11 @@
+import json
 import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from plainjot_core import ConflictError, InvalidDocument, PlainJotStore, parse_frontmatter
+from plainjot_core import ConflictError, InvalidDocument, PlainJotStore, default_notes_dir, parse_frontmatter
 
 
 TASK_TEXT = """---
@@ -50,6 +51,21 @@ class PlainJotCoreTests(unittest.TestCase):
         self.assertEqual(metadata["created"], "2026-08-24T22:30:00Z")
         self.assertEqual(metadata["completed"], "")
         self.assertIn("# Add filesystem watcher", markdown)
+
+    def test_default_directory_uses_shared_configuration(self):
+        selected = self.root / "selected"
+        selected.mkdir()
+        config_file = self.root / "config.json"
+        config_file.write_text(json.dumps({"notes_directory": str(selected)}), encoding="utf-8")
+        self.assertEqual(default_notes_dir(home=self.root, config_file=config_file), selected.resolve())
+
+    def test_default_directory_ignores_invalid_configuration(self):
+        config_file = self.root / "config.json"
+        config_file.write_text('{"notes_directory": "relative/path"}', encoding="utf-8")
+        self.assertEqual(
+            default_notes_dir(home=self.root, config_file=config_file),
+            (self.root / "Documents" / "PlainJot").resolve(),
+        )
 
     def test_reads_legacy_note_without_frontmatter(self):
         path = self.root / "legacy-note.md"

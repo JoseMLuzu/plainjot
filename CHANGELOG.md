@@ -13,6 +13,7 @@ All notable changes are documented here. PlainJot follows semantic versioning on
 - Reusable Python and Swift filesystem cores
 - CI, release archive tooling, and contributor documentation
 - Native opening and selection of Markdown files inside the PlainJot folder
+- Native folder picker with a shared app and CLI location
 
 ### Changed
 

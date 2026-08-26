@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app import NotesStore, render_markdown, slugify, split_markdown
+from app import NotesStore, folder_info, render_markdown, slugify, split_markdown
 
 
 class NotesStoreTests(unittest.TestCase):
@@ -47,6 +47,11 @@ class NotesStoreTests(unittest.TestCase):
         title, body = split_markdown(Path("nota.md"), rendered)
         self.assertEqual(title, "Título")
         self.assertEqual(body, "Línea 1\nLínea 2")
+
+    def test_folder_info_reports_the_active_directory(self):
+        info = folder_info(Path.home() / "Documents" / "PlainJot")
+        self.assertEqual(info["display_path"], "~/Documents/PlainJot")
+        self.assertFalse(info["can_choose"])
 
 
 if __name__ == "__main__":

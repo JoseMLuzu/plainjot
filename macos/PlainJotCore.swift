@@ -11,6 +11,44 @@ private let taskStatuses: Set<String> = ["inbox", "todo", "done"]
 private let taskFields = ["type", "status", "project", "source", "created", "completed"]
 private let maximumFileBytes = 2 * 1024 * 1024
 
+struct PlainJotConfiguration {
+    let fileURL: URL
+
+    static var defaultFileURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("PlainJot", isDirectory: true)
+            .appendingPathComponent("config.json", isDirectory: false)
+    }
+
+    func loadNotesDirectory() -> URL? {
+        guard
+            let data = try? Data(contentsOf: fileURL),
+            let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let path = payload["notes_directory"] as? String,
+            path.hasPrefix("/")
+        else { return nil }
+
+        let candidate = URL(fileURLWithPath: path, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return nil
+        }
+        return candidate
+    }
+
+    func saveNotesDirectory(_ directoryURL: URL) throws {
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let payload = ["notes_directory": directoryURL.standardizedFileURL.resolvingSymlinksInPath().path]
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: fileURL, options: .atomic)
+    }
+}
+
 private struct ParsedDocument {
     let id: String
     let title: String
