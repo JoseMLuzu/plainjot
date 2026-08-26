@@ -14,14 +14,17 @@ All notable changes are documented here. PlainJot follows semantic versioning on
 - CI, release archive tooling, and contributor documentation
 - Native opening and selection of Markdown files inside the PlainJot folder
 - Native folder picker with a shared app and CLI location
+- Recoverable draft conflict resolution for external edits
 
 ### Changed
 
 - Existing notes and tasks open in preview, while newly created documents open in write mode
+- Native deletions move Markdown files to the macOS Trash
 
 ### Security
 
 - Explicit symlink rejection and optimistic revision checks for external edits
+- Conflicting local drafts remain stored until the user resolves them
 
 ## 0.1.0 — Initial foundation
 

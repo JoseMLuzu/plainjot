@@ -100,6 +100,13 @@
           </div>
 
           <div class="note-document">
+            <div id="conflict-banner" class="conflict-banner hidden" role="alert">
+              <span>Este archivo cambió fuera de PlainJot. Tu borrador está protegido.</span>
+              <div class="conflict-actions">
+                <button id="keep-local-version" type="button">Conservar mi versión</button>
+                <button id="load-external-version" type="button">Cargar versión externa</button>
+              </div>
+            </div>
             <input id="note-title" class="title-input" maxlength="200" placeholder="Sin título" aria-label="Título de la nota" />
             <div class="note-meta">
               <span id="note-date">Ahora</span>

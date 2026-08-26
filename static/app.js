@@ -9,6 +9,7 @@ const state = {
   loadingDocument: false,
   saving: false,
   choosingFolder: false,
+  conflict: null,
   folder: null,
   view: "write",
 };
@@ -38,6 +39,9 @@ const elements = {
   previewTab: document.querySelector("#preview-tab"),
   taskAction: document.querySelector("#task-action"),
   taskContext: document.querySelector("#task-context"),
+  conflictBanner: document.querySelector("#conflict-banner"),
+  keepLocalVersion: document.querySelector("#keep-local-version"),
+  loadExternalVersion: document.querySelector("#load-external-version"),
   newItem: document.querySelector("#new-item"),
   folder: document.querySelector("#notes-folder"),
   folderLabel: document.querySelector("#notes-folder-label"),
@@ -57,6 +61,129 @@ async function api(path, options = {}) {
     throw error;
   }
   return response.status === 204 ? null : response.json();
+}
+
+function conflictDraftKey(documentId) {
+  return `plainjot-conflict:${state.folder?.path || "default"}:${documentId}`;
+}
+
+function readConflictDraft(documentId) {
+  try {
+    const draft = JSON.parse(localStorage.getItem(conflictDraftKey(documentId)) || "null");
+    return typeof draft?.title === "string" && typeof draft?.body === "string" ? draft : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistConflictDraft() {
+  if (!state.conflict || !state.selectedId) return;
+  try {
+    localStorage.setItem(
+      conflictDraftKey(state.selectedId),
+      JSON.stringify({ title: elements.title.value, body: elements.body.value, saved_at: new Date().toISOString() })
+    );
+  } catch {
+    showToast("No se pudo conservar una copia local del borrador.");
+  }
+}
+
+function removeConflictDraft(documentId) {
+  try {
+    localStorage.removeItem(conflictDraftKey(documentId));
+  } catch {
+    // The resolved file remains the source of truth even if browser storage is unavailable.
+  }
+}
+
+function hideConflictNotice() {
+  elements.conflictBanner.classList.add("hidden");
+}
+
+function activateConflict(externalDocument, draft = null) {
+  if (!state.selectedId || externalDocument.id !== state.selectedId) return;
+  clearTimeout(state.saveTimer);
+  state.saveTimer = null;
+  state.current = externalDocument;
+  state.conflict = { external: externalDocument };
+  if (draft) {
+    elements.title.value = draft.title;
+    elements.body.value = draft.body;
+  }
+  persistConflictDraft();
+  elements.conflictBanner.classList.remove("hidden");
+  setSaveStatus("Conflicto pendiente");
+  updateEditorStats();
+}
+
+function restoreConflictDraft(document) {
+  const draft = readConflictDraft(document.id);
+  if (!draft) return false;
+  activateConflict(document, draft);
+  return true;
+}
+
+async function enterSaveConflict(documentId) {
+  if (state.selectedId !== documentId || !state.current) return;
+  const draft = { title: elements.title.value, body: elements.body.value };
+  state.conflict = { external: state.current };
+  persistConflictDraft();
+  try {
+    const external = await api(`/api/documents/${encodeURIComponent(documentId)}`);
+    activateConflict(external, draft);
+  } catch (error) {
+    setSaveStatus("Borrador protegido");
+    showToast(error.message);
+  }
+}
+
+async function keepLocalConflictVersion() {
+  if (!state.conflict || !state.selectedId || state.saving) return;
+  const documentId = state.selectedId;
+  const view = state.view;
+  state.saving = true;
+  setSaveStatus("Guardando tu versión…");
+  try {
+    const updated = await api(`/api/documents/${encodeURIComponent(documentId)}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        title: elements.title.value.trim() || "Sin título",
+        body: elements.body.value,
+        expected_revision: state.conflict.external.revision,
+      }),
+    });
+    removeConflictDraft(documentId);
+    state.conflict = null;
+    showDocument(updated, { view });
+    await loadCollections();
+    showToast("Se conservó tu versión");
+  } catch (error) {
+    if (error.status === 409) {
+      await enterSaveConflict(documentId);
+      showToast("El archivo volvió a cambiar. Revisa el conflicto actualizado.");
+    } else {
+      setSaveStatus("Borrador protegido");
+      showToast(error.message);
+    }
+  } finally {
+    state.saving = false;
+  }
+}
+
+async function loadExternalConflictVersion() {
+  if (!state.conflict || !state.selectedId) return;
+  const documentId = state.selectedId;
+  const view = state.view;
+  try {
+    const external = await api(`/api/documents/${encodeURIComponent(documentId)}`);
+    removeConflictDraft(documentId);
+    state.conflict = null;
+    showDocument(external, { view });
+    await loadCollections();
+    showToast("Se cargó la versión externa");
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 function updateFolderInfo(folder) {
@@ -232,11 +359,13 @@ async function openDocumentFromSystem(documentId) {
 function showDocument(document, { focus = false, view = state.view } = {}) {
   state.current = document;
   state.selectedId = document.id;
+  state.conflict = null;
+  hideConflictNotice();
   elements.title.value = document.title;
   elements.body.value = document.body;
   elements.empty.classList.add("hidden");
   elements.editor.classList.remove("hidden");
-  setSaveStatus("Todo guardado");
+  if (!restoreConflictDraft(document)) setSaveStatus("Todo guardado");
   setView(view, { focus: false });
   updateEditorStats();
   updateDocumentMetadata();
@@ -284,6 +413,12 @@ function createForCurrentSection() {
 
 function scheduleSave() {
   if (!state.selectedId) return;
+  if (state.conflict) {
+    setSaveStatus("Conflicto pendiente");
+    updateEditorStats();
+    persistConflictDraft();
+    return;
+  }
   setSaveStatus("Editando…");
   updateEditorStats();
   clearTimeout(state.saveTimer);
@@ -294,6 +429,10 @@ async function saveCurrent() {
   clearTimeout(state.saveTimer);
   state.saveTimer = null;
   if (!state.selectedId || !state.current) return;
+  if (state.conflict) {
+    persistConflictDraft();
+    return;
+  }
   const documentId = state.selectedId;
   state.saving = true;
   setSaveStatus("Guardando…");
@@ -313,8 +452,8 @@ async function saveCurrent() {
     await loadCollections();
   } catch (error) {
     if (error.status === 409) {
-      await reloadSelectedFromDisk();
-      showToast("El archivo cambió fuera de PlainJot. Se cargó la versión externa.");
+      await enterSaveConflict(documentId);
+      showToast("El archivo cambió fuera de PlainJot. Tu borrador está protegido.");
     } else {
       setSaveStatus("Error al guardar");
       showToast(error.message);
@@ -326,22 +465,6 @@ async function saveCurrent() {
 
 async function flushSave() {
   if (state.saveTimer) await saveCurrent();
-}
-
-async function reloadSelectedFromDisk() {
-  if (!state.selectedId) return;
-  try {
-    const document = await api(`/api/documents/${encodeURIComponent(state.selectedId)}`);
-    showDocument(document);
-    await loadCollections();
-  } catch (error) {
-    if (error.status === 404) {
-      clearEditor();
-      await loadCollections({ preserveSelection: false });
-    } else {
-      showToast(error.message);
-    }
-  }
 }
 
 async function transitionTask() {
@@ -358,7 +481,7 @@ async function transitionTask() {
     showDocument(updated);
     await loadCollections();
   } catch (error) {
-    if (error.status === 409) await reloadSelectedFromDisk();
+    if (error.status === 409) await enterSaveConflict(state.current.id);
     showToast(error.message);
   }
 }
@@ -369,16 +492,23 @@ async function deleteCurrent() {
   if (!state.selectedId || !state.current) return;
   const kind = state.current.type === "task" ? "la tarea" : "la nota";
   const title = elements.title.value.trim() || kind;
-  if (!window.confirm(`¿Eliminar “${title}”? Esta acción no se puede deshacer.`)) return;
+  const usesTrash = state.folder?.deletion_mode === "trash";
+  const message = usesTrash
+    ? `¿Mover “${title}” a la Papelera?`
+    : `¿Eliminar “${title}”? Esta acción no se puede deshacer.`;
+  if (!window.confirm(message)) return;
+  const documentId = state.selectedId;
   try {
-    await api(`/api/documents/${encodeURIComponent(state.selectedId)}`, {
+    await api(`/api/documents/${encodeURIComponent(documentId)}`, {
       method: "DELETE",
       body: JSON.stringify({ expected_revision: state.current.revision }),
     });
+    removeConflictDraft(documentId);
     clearEditor();
     await loadCollections({ preserveSelection: false });
-    showToast(`${capitalize(kind)} eliminada`);
+    showToast(usesTrash ? `${capitalize(kind)} enviada a la Papelera` : `${capitalize(kind)} eliminada`);
   } catch (error) {
+    if (error.status === 409) await enterSaveConflict(documentId);
     showToast(error.message);
   }
 }
@@ -388,6 +518,8 @@ function clearEditor() {
   state.saveTimer = null;
   state.selectedId = null;
   state.current = null;
+  state.conflict = null;
+  hideConflictNotice();
   elements.editor.classList.add("hidden");
   elements.empty.classList.remove("hidden");
   elements.title.value = "";
@@ -600,6 +732,7 @@ function showToast(message) {
 }
 
 async function refreshFromFilesystem() {
+  if (state.conflict) return;
   if (state.saveTimer || state.saving || state.loadingDocument) {
     scheduleFilesystemRefresh();
     return;
@@ -628,6 +761,8 @@ window.__plainjotOpenDocument = openDocumentFromSystem;
 elements.newItem.addEventListener("click", createForCurrentSection);
 elements.emptyButton.addEventListener("click", createForCurrentSection);
 elements.folder.addEventListener("click", chooseNotesFolder);
+elements.keepLocalVersion.addEventListener("click", keepLocalConflictVersion);
+elements.loadExternalVersion.addEventListener("click", loadExternalConflictVersion);
 document.querySelector("#delete-note").addEventListener("click", deleteCurrent);
 document.querySelector("#theme-toggle").addEventListener("click", toggleTheme);
 document.querySelector("#refresh").addEventListener("click", async () => {
@@ -659,7 +794,7 @@ document.addEventListener("keydown", (event) => {
     elements.search.select();
   } else if (modifier && event.key.toLowerCase() === "s") {
     event.preventDefault();
-    flushSave().then(() => showToast("Documento guardado"));
+    flushSave().then(() => showToast(state.conflict ? "Resuelve el conflicto pendiente." : "Documento guardado"));
   } else if (modifier && event.shiftKey && event.key.toLowerCase() === "p" && state.selectedId) {
     event.preventDefault();
     setView(state.view === "write" ? "preview" : "write");
@@ -667,11 +802,11 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("beforeunload", () => {
-  if (state.saveTimer) saveCurrent();
+  if (state.conflict) persistConflictDraft();
+  else if (state.saveTimer) saveCurrent();
 });
 
 const savedTheme = localStorage.getItem("plainjot-theme") || localStorage.getItem("notas-theme");
 const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 applyTheme(savedTheme || preferredTheme);
-loadFolderInfo();
-loadCollections();
+loadFolderInfo().then(loadCollections);

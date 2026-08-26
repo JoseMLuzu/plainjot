@@ -44,6 +44,7 @@ def folder_info(notes_dir: Path, *, can_choose: bool = False, changed: bool = Fa
         "path": str(path),
         "display_path": display_path,
         "can_choose": can_choose,
+        "deletion_mode": "permanent",
         "changed": changed,
     }
 

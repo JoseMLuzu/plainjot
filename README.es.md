@@ -24,7 +24,9 @@ PlainJot tiene tres secciones sencillas:
 - **Inbox** para tareas creadas por agentes u otras herramientas.
 - **Tasks** para trabajo pendiente y completado.
 
-La app observa la carpeta PlainJot en macOS, por lo que las creaciones, ediciones, renombres y eliminaciones externas aparecen automáticamente. El guardado automático comprueba revisiones para no sobrescribir silenciosamente una edición externa.
+La app observa la carpeta PlainJot en macOS, por lo que las creaciones, ediciones, renombres y eliminaciones externas aparecen automáticamente. El guardado automático comprueba revisiones para no sobrescribir silenciosamente una edición externa. Si ambas versiones cambian, PlainJot protege el borrador local y te permite elegir cuál conservar.
+
+Eliminar desde la app nativa mueve el archivo Markdown a la Papelera de macOS para que siga siendo recuperable.
 
 Pulsa la ruta de la esquina inferior izquierda para elegir otra carpeta local. PlainJot la recuerda, reinicia el watcher y comparte la selección con la CLI. Los archivos existentes nunca se mueven automáticamente.
 

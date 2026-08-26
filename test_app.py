@@ -52,6 +52,7 @@ class NotesStoreTests(unittest.TestCase):
         info = folder_info(Path.home() / "Documents" / "PlainJot")
         self.assertEqual(info["display_path"], "~/Documents/PlainJot")
         self.assertFalse(info["can_choose"])
+        self.assertEqual(info["deletion_mode"], "permanent")
 
 
 if __name__ == "__main__":

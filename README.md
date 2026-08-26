@@ -26,7 +26,9 @@ PlainJot has three quiet sections:
 - **Inbox** for tasks created by agents or other tools.
 - **Tasks** for `todo` and completed work.
 
-It watches the PlainJot directory on macOS, so external creates, edits, renames, and deletes appear automatically. Autosave uses revision checks to avoid silently overwriting an external edit.
+It watches the PlainJot directory on macOS, so external creates, edits, renames, and deletes appear automatically. Autosave uses revision checks to avoid silently overwriting an external edit. If both versions change, PlainJot protects the local draft and lets you choose which version to keep.
+
+Deleting from the native app moves the Markdown file to the macOS Trash so it remains recoverable.
 
 Click the folder path in the bottom-left corner to choose another local folder. PlainJot remembers it, restarts the watcher, and shares the selection with the CLI. Existing files are never moved automatically.
 

@@ -66,10 +66,14 @@ final class PlainJotStore {
     let directoryURL: URL
     private let fileManager = FileManager.default
     private let dateFormatter: ISO8601DateFormatter
+    private let discardFile: (URL) throws -> Void
 
-    init(directoryURL: URL) throws {
+    init(directoryURL: URL, discardFile: ((URL) throws -> Void)? = nil) throws {
         self.directoryURL = directoryURL.standardizedFileURL.resolvingSymlinksInPath()
         self.dateFormatter = ISO8601DateFormatter()
+        self.discardFile = discardFile ?? { fileURL in
+            try FileManager.default.trashItem(at: fileURL, resultingItemURL: nil)
+        }
         self.dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         try fileManager.createDirectory(at: self.directoryURL, withIntermediateDirectories: true)
     }
@@ -266,7 +270,7 @@ final class PlainJotStore {
         let fileURL = try fileURL(for: documentID)
         let existing = try readDocument(fileURL)
         try checkRevision(existing, expected: expectedRevision)
-        try fileManager.removeItem(at: fileURL)
+        try discardFile(fileURL)
     }
 
     private func readDocument(_ fileURL: URL) throws -> ParsedDocument {

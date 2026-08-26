@@ -77,6 +77,7 @@ final class NotesBridge: NSObject, WKScriptMessageHandler {
             "path": path,
             "display_path": displayPath,
             "can_choose": true,
+            "deletion_mode": "trash",
             "changed": changed,
         ]
     }
@@ -408,7 +409,11 @@ func runSelfTest() throws {
         "No se conservó la carpeta seleccionada"
     )
 
-    let store = try PlainJotStore(directoryURL: testDirectory)
+    var discardedDocumentURL: URL?
+    let store = try PlainJotStore(directoryURL: testDirectory) { fileURL in
+        discardedDocumentURL = fileURL
+        try FileManager.default.removeItem(at: fileURL)
+    }
     let created = try store.route(
         method: "POST",
         path: "/api/notes",
@@ -458,6 +463,10 @@ func runSelfTest() throws {
     }
     let conflictContents = try String(contentsOf: conflictURL, encoding: .utf8)
     try require(conflictContents.contains("Versión externa"), "Se sobrescribió un cambio externo")
+    try requireStoreFailure(status: 409) {
+        try store.deleteDocument(conflictID, expectedRevision: revision)
+    }
+    try require(discardedDocumentURL == nil, "Se descartó un documento con cambios externos")
 
     let taskResponse = try store.route(
         method: "POST",
@@ -525,6 +534,7 @@ func runSelfTest() throws {
 
     _ = try store.route(method: "DELETE", path: "/api/documents/\(noteID)", body: nil)
     try require(!FileManager.default.fileExists(atPath: testDirectory.appendingPathComponent(noteID).path), "Falló el borrado nativo")
+    try require(discardedDocumentURL?.lastPathComponent == noteID, "El documento no se envió al descarte seguro")
     print("Prueba nativa completada correctamente")
 }
 
