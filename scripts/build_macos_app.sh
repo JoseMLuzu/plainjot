@@ -13,6 +13,8 @@ rm -rf "$app_dir" "$build_dir"
 mkdir -p "$contents_dir/MacOS" "$web_dir" "$build_dir/icons"
 
 xcrun swiftc \
+  "$project_dir/macos/PlainJotCore.swift" \
+  "$project_dir/macos/DirectoryWatcher.swift" \
   "$project_dir/macos/main.swift" \
   -framework AppKit \
   -framework WebKit \

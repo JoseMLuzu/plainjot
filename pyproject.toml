@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plainjot"
+version = "0.2.0"
+description = "Local-first Markdown notes and tasks for humans and coding agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "JoseMLuzu" }]
+dependencies = []
+classifiers = [
+  "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
+  "Programming Language :: Python :: 3",
+]
+
+[project.scripts]
+plainjot = "plainjot_core.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["plainjot_core*"]

@@ -1,41 +1,117 @@
 # PlainJot
 
-> Notes that stay yours.
+**Notes for you. Memory for your agents.**
 
-PlainJot is a small, local-first Markdown notes app for people and coding agents. It keeps notes in ordinary files on your Mac—without accounts, databases, or external dependencies.
+A local-first Markdown notebook and task inbox built for humans and coding agents.
 
 [Leer en español](README.es.md)
 
-- Plain Markdown files that remain yours.
-- Search, autosave, Markdown preview, and light/dark themes.
-- A native macOS app that runs without Python or a local server.
-- A standard-library Python server for web development.
+- Local first
+- Markdown files
+- No account
+- No cloud required
+- Human + agent friendly
+- Native macOS app
+- Open source
 
-## macOS app
+> **Files first. Local first. Agent friendly.**
 
-Building requires macOS 13 or later and the Xcode command-line tools.
+PlainJot is intentionally small. It is not a workspace, knowledge graph, or project-management system. Ordinary `.md` files in `~/Documents/PlainJot` are always the source of truth.
+
+## What it does
+
+PlainJot has three quiet sections:
+
+- **Notes** for normal Markdown documents.
+- **Inbox** for tasks created by agents or other tools.
+- **Tasks** for `todo` and completed work.
+
+It watches the PlainJot directory on macOS, so external creates, edits, renames, and deletes appear automatically. Autosave uses revision checks to avoid silently overwriting an external edit.
+
+## Build the macOS app
+
+Requirements: macOS 13 or later and the Xcode command-line tools.
 
 ```bash
 git clone https://github.com/JoseMLuzu/plainjot.git
 cd plainjot
 ./scripts/build_macos_app.sh
+open dist/PlainJot.app
 ```
 
-The app is generated at `dist/PlainJot.app`. Move it to your `Applications` folder and open it normally.
+The native app embeds the shared HTML/CSS/JavaScript interface in WebKit. It does not need Python while running.
 
-## Where notes live
+## Install the CLI
 
-PlainJot stores notes in:
+The dependency-free installer places `plainjot` in `~/.local/bin`:
+
+```bash
+./scripts/install_cli.sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+You can also use `./plainjot` directly from the repository.
+
+```bash
+plainjot add "My note"
+plainjot task "Fix authentication"
+plainjot task "Clean profiles" --project outcrew
+plainjot task "Fix login" --source codex
+plainjot list
+plainjot list --inbox
+plainjot list --tasks
+plainjot search "authentication"
+plainjot done fix-auth
+```
+
+Both the CLI and app operate on exactly the same Markdown files.
+
+## Use with AI agents
+
+Any coding agent with permission to run local commands can create an inbox task:
+
+```bash
+plainjot task "Refactor authentication" \
+  --project my-project \
+  --source codex
+```
+
+For Claude Code, use the same command with an accurate source value:
+
+```bash
+plainjot task "Review the release script" \
+  --project plainjot \
+  --source claude-code
+```
+
+Other agents do not need a dedicated integration. They can use the CLI or write a valid Markdown file directly inside:
 
 ```text
 ~/Documents/PlainJot
 ```
 
-Each note is a standalone Markdown file, so editors and coding agents can work with it directly. For example:
+These workflows rely only on normal shell and filesystem access. No official Codex or Claude Code plugin is required or claimed.
 
-> Save a summary of this session to `~/Documents/PlainJot/project-summary.md`, using the title as a `#` heading.
+## Task format
 
-Previous “Notas Local” installations automatically migrate `~/Documents/NotasLocal` when possible.
+Tasks are ordinary Markdown files with a small YAML frontmatter block:
+
+```markdown
+---
+type: task
+status: inbox
+project: plainjot
+source: codex
+created: 2026-08-24T22:30:00Z
+completed:
+---
+
+# Add filesystem watcher
+
+Detect external Markdown changes automatically.
+```
+
+The supported states are deliberately limited to `inbox`, `todo`, and `done`. Notes without frontmatter remain fully compatible.
 
 ## Web development
 
@@ -45,30 +121,46 @@ The development server requires Python 3.10 or later and uses only the standard 
 python3 app.py
 ```
 
-Then open `http://127.0.0.1:8765`. A different notes directory or port can be selected:
+Then open `http://127.0.0.1:8765`. To use disposable files during development:
 
 ```bash
-python3 app.py --notes-dir ~/Documents/MyNotes --port 9000
+python3 app.py --notes-dir /tmp/plainjot-dev --port 9000
 ```
 
-## Keyboard shortcuts
+## Architecture
 
-- `⌘ N`: create a note.
-- `⌘ K`: search.
-- `⌘ S`: save immediately.
-- `⌘ ⇧ P`: switch between writing and preview.
+```text
+Markdown files
+├── Python Core → CLI and development server
+└── Swift Core  → native WebKit bridge and filesystem watcher
+                         ↓
+                shared HTML / CSS / JavaScript
+```
+
+The Python Core is reusable by a future small MCP server. The Swift Core keeps the macOS app native and independent of a Python runtime. Both implement the same documented Markdown contract without a database or YAML dependency.
 
 ## Tests
 
 ```bash
 python3 -m unittest -v
+node --check static/app.js
 ./scripts/build_macos_app.sh
 ./dist/PlainJot.app/Contents/MacOS/PlainJot --self-test
 ```
 
-## Contributing
+## Downloadable build
 
-Bug reports, ideas, and pull requests are welcome. Before submitting a change, run the tests and preserve PlainJot's focus: a simple, local experience built on open files.
+Create a validated zip without publishing a release:
+
+```bash
+./scripts/package_release.sh
+```
+
+The archive appears in `dist/`. Development builds are signed ad hoc. Public distribution requires an Apple Developer ID signature and notarization; the exact manual process is documented in [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md).
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [ROADMAP.md](ROADMAP.md), and [SECURITY.md](SECURITY.md). Keep personal notes, generated apps, credentials, and signing material out of the repository.
 
 ## License
 

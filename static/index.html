@@ -19,7 +19,7 @@
               <p>Local y privado</p>
             </div>
           </div>
-          <button id="new-note" class="new-note-button" type="button" title="Nueva nota (⌘N)">
+          <button id="new-item" class="new-note-button" type="button" title="Crear (⌘N)">
             <span aria-hidden="true">＋</span>
             <span>Nueva</span>
           </button>
@@ -30,14 +30,23 @@
             <circle cx="11" cy="11" r="6.5"></circle>
             <path d="m16 16 4 4"></path>
           </svg>
-          <input id="search" type="search" placeholder="Buscar notas" autocomplete="off" />
+          <input id="search" type="search" placeholder="Buscar" autocomplete="off" />
           <kbd>⌘ K</kbd>
         </label>
 
-        <div class="list-heading">
-          <span>RECIENTES</span>
-          <span id="note-count" class="note-count">0</span>
-        </div>
+        <nav class="section-nav" aria-label="Secciones principales">
+          <button class="section-button active" type="button" data-section="notes" aria-current="page">
+            <span>Notes</span><span id="notes-count" class="note-count">0</span>
+          </button>
+          <button class="section-button" type="button" data-section="inbox">
+            <span>Inbox</span><span id="inbox-count" class="note-count">0</span>
+          </button>
+          <button class="section-button" type="button" data-section="tasks">
+            <span>Tasks</span><span id="tasks-count" class="note-count">0</span>
+          </button>
+        </nav>
+
+        <div class="list-heading"><span id="list-heading-label">RECIENTES</span></div>
         <div id="notes-list" class="notes-list" aria-live="polite"></div>
 
         <footer class="sidebar-footer">
@@ -68,10 +77,10 @@
             <span class="paper paper-back"></span>
             <span class="paper paper-front"><i></i><i></i><i></i></span>
           </div>
-          <p class="empty-kicker">TU ESPACIO PERSONAL</p>
-          <h2>Las ideas empiezan aquí.</h2>
-          <p class="empty-copy">Crea una nota o pídele a Codex que guarde un archivo Markdown. Todo permanece en tu computadora.</p>
-          <button id="empty-new-note" class="primary-button" type="button">Crear una nota</button>
+          <p id="empty-kicker" class="empty-kicker">TU ESPACIO PERSONAL</p>
+          <h2 id="empty-title">Las ideas empiezan aquí.</h2>
+          <p id="empty-copy" class="empty-copy">Crea una nota o pídele a un agente que guarde un archivo Markdown. Todo permanece en tu computadora.</p>
+          <button id="empty-new-item" class="primary-button" type="button">Crear una nota</button>
           <span class="shortcut-hint">Presiona <kbd>⌘ N</kbd> en cualquier momento</span>
         </div>
 
@@ -81,10 +90,13 @@
               <button id="write-tab" class="view-tab active" type="button" role="tab" aria-selected="true">Escribir</button>
               <button id="preview-tab" class="view-tab" type="button" role="tab" aria-selected="false">Vista previa</button>
             </div>
-            <button id="delete-note" class="delete-button" type="button" title="Eliminar nota">
-              <span aria-hidden="true">⌫</span>
-              <span>Eliminar</span>
-            </button>
+            <div class="document-actions">
+              <button id="task-action" class="task-action hidden" type="button"></button>
+              <button id="delete-note" class="delete-button" type="button" title="Eliminar documento">
+                <span aria-hidden="true">⌫</span>
+                <span>Eliminar</span>
+              </button>
+            </div>
           </div>
 
           <div class="note-document">
@@ -94,13 +106,14 @@
               <span aria-hidden="true">•</span>
               <span id="note-filename">nota.md</span>
             </div>
+            <div id="task-context" class="task-context hidden"></div>
             <textarea id="note-body" class="body-input" placeholder="Empieza a escribir…" spellcheck="true" aria-label="Contenido de la nota"></textarea>
             <article id="markdown-preview" class="markdown-preview hidden" aria-label="Vista previa de la nota"></article>
           </div>
 
           <footer class="editor-footer">
             <span id="word-count">0 palabras</span>
-            <span>Markdown compatible</span>
+            <span id="document-kind">Markdown compatible</span>
           </footer>
         </div>
       </section>

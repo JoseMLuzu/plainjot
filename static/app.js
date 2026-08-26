@@ -1,18 +1,29 @@
 const state = {
   notes: [],
+  tasks: [],
+  section: "notes",
   selectedId: null,
   current: null,
   saveTimer: null,
-  loadingNote: false,
+  externalTimer: null,
+  loadingDocument: false,
+  saving: false,
   view: "write",
 };
 
 const elements = {
   list: document.querySelector("#notes-list"),
-  count: document.querySelector("#note-count"),
   search: document.querySelector("#search"),
   editor: document.querySelector("#editor"),
   empty: document.querySelector("#empty-state"),
+  emptyKicker: document.querySelector("#empty-kicker"),
+  emptyTitle: document.querySelector("#empty-title"),
+  emptyCopy: document.querySelector("#empty-copy"),
+  emptyButton: document.querySelector("#empty-new-item"),
+  listHeading: document.querySelector("#list-heading-label"),
+  notesCount: document.querySelector("#notes-count"),
+  inboxCount: document.querySelector("#inbox-count"),
+  tasksCount: document.querySelector("#tasks-count"),
   title: document.querySelector("#note-title"),
   body: document.querySelector("#note-body"),
   preview: document.querySelector("#markdown-preview"),
@@ -20,8 +31,12 @@ const elements = {
   date: document.querySelector("#note-date"),
   filename: document.querySelector("#note-filename"),
   wordCount: document.querySelector("#word-count"),
+  documentKind: document.querySelector("#document-kind"),
   writeTab: document.querySelector("#write-tab"),
   previewTab: document.querySelector("#preview-tab"),
+  taskAction: document.querySelector("#task-action"),
+  taskContext: document.querySelector("#task-context"),
+  newItem: document.querySelector("#new-item"),
   toast: document.querySelector("#toast"),
   themeMeta: document.querySelector('meta[name="theme-color"]'),
 };
@@ -33,85 +48,142 @@ async function api(path, options = {}) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || "No se pudo completar la operación");
+    const error = new Error(payload.error || "No se pudo completar la operación");
+    error.status = response.status;
+    throw error;
   }
   return response.status === 204 ? null : response.json();
 }
 
-async function loadNotes({ preserveSelection = true } = {}) {
+async function loadCollections({ preserveSelection = true } = {}) {
   try {
-    state.notes = await api("/api/notes");
-    if (preserveSelection && state.selectedId && !state.notes.some((note) => note.id === state.selectedId)) {
+    [state.notes, state.tasks] = await Promise.all([api("/api/notes"), api("/api/tasks")]);
+    const allItems = [...state.notes, ...state.tasks];
+    if (preserveSelection && state.selectedId && !allItems.some((item) => item.id === state.selectedId)) {
       clearEditor();
     }
+    renderNavigation();
     renderList();
-    updateNoteMetadata();
+    updateDocumentMetadata();
+    updateEmptyState();
   } catch (error) {
     showToast(error.message);
   }
 }
 
+function sectionItems() {
+  if (state.section === "notes") return state.notes;
+  if (state.section === "inbox") return state.tasks.filter((task) => task.status === "inbox");
+  return state.tasks.filter((task) => task.status !== "inbox");
+}
+
+function renderNavigation() {
+  const inbox = state.tasks.filter((task) => task.status === "inbox");
+  const tasks = state.tasks.filter((task) => task.status !== "inbox");
+  elements.notesCount.textContent = state.notes.length;
+  elements.inboxCount.textContent = inbox.length;
+  elements.tasksCount.textContent = tasks.length;
+  document.querySelectorAll(".section-button").forEach((button) => {
+    const active = button.dataset.section === state.section;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  elements.listHeading.textContent = state.section === "notes" ? "RECIENTES" : state.section.toUpperCase();
+  const createsNote = state.section === "notes";
+  elements.newItem.lastElementChild.textContent = createsNote ? "Nota" : "Tarea";
+  elements.newItem.title = createsNote ? "Nueva nota (⌘N)" : "Nueva tarea (⌘⇧N)";
+}
+
 function renderList() {
   const query = elements.search.value.trim().toLocaleLowerCase();
-  const notes = state.notes.filter((note) =>
-    `${note.title} ${note.preview}`.toLocaleLowerCase().includes(query)
+  const items = sectionItems().filter((item) =>
+    `${item.title} ${item.preview} ${item.project || ""} ${item.source || ""}`
+      .toLocaleLowerCase()
+      .includes(query)
   );
-  elements.count.textContent = query ? `${notes.length}/${state.notes.length}` : state.notes.length;
   elements.list.replaceChildren();
-  if (!notes.length) {
+  if (!items.length) {
     const message = document.createElement("p");
     message.className = "list-message";
-    message.textContent = query ? "No encontramos ninguna nota con ese texto." : "Todavía no hay notas. Crea la primera cuando estés listo.";
+    message.textContent = query
+      ? "No encontramos nada con ese texto."
+      : state.section === "notes"
+        ? "Todavía no hay notas."
+        : state.section === "inbox"
+          ? "Inbox está limpio."
+          : "Todavía no hay tareas.";
     elements.list.append(message);
     return;
   }
 
-  for (const note of notes) {
+  for (const item of items) {
     const button = document.createElement("button");
-    button.className = `note-card${note.id === state.selectedId ? " active" : ""}`;
+    button.className = `note-card${item.id === state.selectedId ? " active" : ""}${item.status === "done" ? " done" : ""}`;
     button.type = "button";
 
     const top = document.createElement("span");
     top.className = "note-card-top";
     const title = document.createElement("strong");
-    title.textContent = note.title;
+    if (item.type === "task") {
+      const mark = document.createElement("i");
+      mark.className = "task-mark";
+      mark.textContent = item.status === "done" ? "✓" : "";
+      title.append(mark, document.createTextNode(item.title));
+    } else {
+      title.textContent = item.title;
+    }
     const time = document.createElement("time");
-    time.dateTime = note.modified;
-    time.textContent = formatCompactDate(note.modified);
+    time.dateTime = item.modified;
+    time.textContent = item.type === "task" ? formatRelativeDate(item.modified) : formatCompactDate(item.modified);
     top.append(title, time);
+    button.append(top);
 
-    const preview = document.createElement("span");
-    preview.className = "note-preview";
-    preview.textContent = note.preview || "Nota vacía";
-    button.append(top, preview);
-    button.addEventListener("click", () => selectNote(note.id));
+    if (item.type === "task") {
+      const context = document.createElement("span");
+      context.className = "task-card-context";
+      context.textContent = [item.project, item.source].filter(Boolean).map(capitalize).join(" · ") || "Sin proyecto";
+      button.append(context);
+    } else {
+      const preview = document.createElement("span");
+      preview.className = "note-preview";
+      preview.textContent = item.preview || "Nota vacía";
+      button.append(preview);
+    }
+    button.addEventListener("click", () => selectDocument(item.id));
     elements.list.append(button);
   }
 }
 
-async function selectNote(noteId) {
-  if (state.loadingNote || noteId === state.selectedId) return;
+async function selectDocument(documentId) {
+  if (state.loadingDocument || documentId === state.selectedId) return;
   await flushSave();
-  state.loadingNote = true;
+  state.loadingDocument = true;
   try {
-    state.current = await api(`/api/notes/${encodeURIComponent(noteId)}`);
-    state.selectedId = noteId;
-    elements.title.value = state.current.title;
-    elements.body.value = state.current.body;
-    elements.empty.classList.add("hidden");
-    elements.editor.classList.remove("hidden");
-    setSaveStatus("Todo guardado");
-    setView("write");
-    updateEditorStats();
-    updateNoteMetadata();
-    renderList();
-    elements.title.focus();
+    const document = await api(`/api/documents/${encodeURIComponent(documentId)}`);
+    showDocument(document, { focus: true });
   } catch (error) {
     showToast(error.message);
-    await loadNotes();
+    await loadCollections();
   } finally {
-    state.loadingNote = false;
+    state.loadingDocument = false;
   }
+}
+
+function showDocument(document, { focus = false } = {}) {
+  state.current = document;
+  state.selectedId = document.id;
+  elements.title.value = document.title;
+  elements.body.value = document.body;
+  elements.empty.classList.add("hidden");
+  elements.editor.classList.remove("hidden");
+  setSaveStatus("Todo guardado");
+  setView("write", { focus: false });
+  updateEditorStats();
+  updateDocumentMetadata();
+  updateTaskControls();
+  renderList();
+  if (focus) elements.title.focus();
 }
 
 async function createNote() {
@@ -121,12 +193,34 @@ async function createNote() {
       method: "POST",
       body: JSON.stringify({ title: "Nueva nota", body: "" }),
     });
-    await loadNotes();
-    await selectNote(note.id);
+    state.section = "notes";
+    await loadCollections();
+    await selectDocument(note.id);
     elements.title.select();
   } catch (error) {
     showToast(error.message);
   }
+}
+
+async function createTask(status = "inbox") {
+  await flushSave();
+  try {
+    const task = await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ title: "Nueva tarea", body: "", status, project: "", source: "" }),
+    });
+    state.section = status === "inbox" ? "inbox" : "tasks";
+    await loadCollections();
+    await selectDocument(task.id);
+    elements.title.select();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function createForCurrentSection() {
+  if (state.section === "notes") createNote();
+  else createTask(state.section === "tasks" ? "todo" : "inbox");
 }
 
 function scheduleSave() {
@@ -140,22 +234,34 @@ function scheduleSave() {
 async function saveCurrent() {
   clearTimeout(state.saveTimer);
   state.saveTimer = null;
-  if (!state.selectedId) return;
-  const noteId = state.selectedId;
+  if (!state.selectedId || !state.current) return;
+  const documentId = state.selectedId;
+  state.saving = true;
   setSaveStatus("Guardando…");
   try {
-    state.current = await api(`/api/notes/${encodeURIComponent(noteId)}`, {
+    const updated = await api(`/api/documents/${encodeURIComponent(documentId)}`, {
       method: "PUT",
       body: JSON.stringify({
         title: elements.title.value.trim() || "Sin título",
         body: elements.body.value,
+        expected_revision: state.current.revision,
       }),
     });
-    if (state.selectedId === noteId) setSaveStatus("Todo guardado");
-    await loadNotes();
+    if (state.selectedId === documentId) {
+      state.current = updated;
+      setSaveStatus("Todo guardado");
+    }
+    await loadCollections();
   } catch (error) {
-    setSaveStatus("Error al guardar");
-    showToast(error.message);
+    if (error.status === 409) {
+      await reloadSelectedFromDisk();
+      showToast("El archivo cambió fuera de PlainJot. Se cargó la versión externa.");
+    } else {
+      setSaveStatus("Error al guardar");
+      showToast(error.message);
+    }
+  } finally {
+    state.saving = false;
   }
 }
 
@@ -163,15 +269,56 @@ async function flushSave() {
   if (state.saveTimer) await saveCurrent();
 }
 
-async function deleteCurrent() {
+async function reloadSelectedFromDisk() {
   if (!state.selectedId) return;
-  const title = elements.title.value.trim() || "esta nota";
+  try {
+    const document = await api(`/api/documents/${encodeURIComponent(state.selectedId)}`);
+    showDocument(document);
+    await loadCollections();
+  } catch (error) {
+    if (error.status === 404) {
+      clearEditor();
+      await loadCollections({ preserveSelection: false });
+    } else {
+      showToast(error.message);
+    }
+  }
+}
+
+async function transitionTask() {
+  if (!state.current || state.current.type !== "task") return;
+  await flushSave();
+  if (!state.current || state.current.type !== "task") return;
+  const nextStatus = state.current.status === "inbox" ? "todo" : state.current.status === "todo" ? "done" : "todo";
+  try {
+    const updated = await api(`/api/tasks/${encodeURIComponent(state.current.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: nextStatus, expected_revision: state.current.revision }),
+    });
+    state.section = nextStatus === "inbox" ? "inbox" : "tasks";
+    showDocument(updated);
+    await loadCollections();
+  } catch (error) {
+    if (error.status === 409) await reloadSelectedFromDisk();
+    showToast(error.message);
+  }
+}
+
+async function deleteCurrent() {
+  if (!state.selectedId || !state.current) return;
+  await flushSave();
+  if (!state.selectedId || !state.current) return;
+  const kind = state.current.type === "task" ? "la tarea" : "la nota";
+  const title = elements.title.value.trim() || kind;
   if (!window.confirm(`¿Eliminar “${title}”? Esta acción no se puede deshacer.`)) return;
   try {
-    await api(`/api/notes/${encodeURIComponent(state.selectedId)}`, { method: "DELETE" });
+    await api(`/api/documents/${encodeURIComponent(state.selectedId)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expected_revision: state.current.revision }),
+    });
     clearEditor();
-    await loadNotes({ preserveSelection: false });
-    showToast("Nota eliminada");
+    await loadCollections({ preserveSelection: false });
+    showToast(`${capitalize(kind)} eliminada`);
   } catch (error) {
     showToast(error.message);
   }
@@ -187,10 +334,51 @@ function clearEditor() {
   elements.title.value = "";
   elements.body.value = "";
   setSaveStatus("Todo guardado");
+  updateEmptyState();
   renderList();
 }
 
-function setView(view) {
+async function changeSection(section) {
+  if (section === state.section) return;
+  await flushSave();
+  state.section = section;
+  if (state.selectedId && !sectionItems().some((item) => item.id === state.selectedId)) clearEditor();
+  renderNavigation();
+  renderList();
+  updateEmptyState();
+}
+
+function updateEmptyState() {
+  const content = {
+    notes: ["TU ESPACIO PERSONAL", "Las ideas empiezan aquí.", "Tus notas son archivos Markdown locales que también pueden leer tus agentes.", "Crear una nota"],
+    inbox: ["AGENT INBOX", "Las tareas externas llegan aquí.", "Codex, Claude Code u otras herramientas pueden escribir tareas directamente en tu carpeta PlainJot.", "Crear una tarea"],
+    tasks: ["TAREAS", "Una lista pequeña y clara.", "Mueve tareas desde Inbox, complétalas y deja que Markdown siga siendo la fuente de verdad.", "Crear una tarea"],
+  }[state.section];
+  [elements.emptyKicker.textContent, elements.emptyTitle.textContent, elements.emptyCopy.textContent, elements.emptyButton.textContent] = content;
+}
+
+function updateTaskControls() {
+  const isTask = state.current?.type === "task";
+  elements.taskAction.classList.toggle("hidden", !isTask);
+  elements.taskContext.classList.toggle("hidden", !isTask);
+  elements.documentKind.textContent = isTask ? "Markdown task" : "Markdown note";
+  if (!isTask) return;
+  const labels = { inbox: "Mover a Tasks", todo: "Completar", done: "Reabrir" };
+  elements.taskAction.textContent = labels[state.current.status] || "Mover a Tasks";
+  elements.taskContext.replaceChildren();
+  const values = [
+    state.current.project && `Proyecto: ${state.current.project}`,
+    state.current.source && `Fuente: ${state.current.source}`,
+    `Estado: ${state.current.status}`,
+  ].filter(Boolean);
+  for (const value of values) {
+    const span = document.createElement("span");
+    span.textContent = value;
+    elements.taskContext.append(span);
+  }
+}
+
+function setView(view, { focus = true } = {}) {
   state.view = view;
   const isPreview = view === "preview";
   elements.writeTab.classList.toggle("active", !isPreview);
@@ -200,7 +388,7 @@ function setView(view) {
   elements.body.classList.toggle("hidden", isPreview);
   elements.preview.classList.toggle("hidden", !isPreview);
   if (isPreview) renderMarkdownPreview();
-  else elements.body.focus();
+  else if (focus) elements.body.focus();
 }
 
 function updateEditorStats() {
@@ -210,12 +398,12 @@ function updateEditorStats() {
   if (state.view === "preview") renderMarkdownPreview();
 }
 
-function updateNoteMetadata() {
+function updateDocumentMetadata() {
   if (!state.selectedId) return;
-  const note = state.notes.find((item) => item.id === state.selectedId);
+  const item = [...state.notes, ...state.tasks].find((candidate) => candidate.id === state.selectedId);
   elements.filename.textContent = state.selectedId;
   elements.filename.title = state.selectedId;
-  elements.date.textContent = note ? formatLongDate(note.modified) : "Ahora";
+  elements.date.textContent = item ? formatLongDate(item.modified) : "Ahora";
 }
 
 function formatCompactDate(value) {
@@ -227,6 +415,17 @@ function formatCompactDate(value) {
   return new Intl.DateTimeFormat("es", { day: "numeric", month: "short" }).format(date).replace(".", "");
 }
 
+function formatRelativeDate(value) {
+  const seconds = Math.round((new Date(value).getTime() - Date.now()) / 1000);
+  const formatter = new Intl.RelativeTimeFormat("es", { numeric: "auto" });
+  if (Math.abs(seconds) < 60) return formatter.format(seconds, "second");
+  const minutes = Math.round(seconds / 60);
+  if (Math.abs(minutes) < 60) return formatter.format(minutes, "minute");
+  const hours = Math.round(minutes / 60);
+  if (Math.abs(hours) < 24) return formatter.format(hours, "hour");
+  return formatter.format(Math.round(hours / 24), "day");
+}
+
 function formatLongDate(value) {
   return new Intl.DateTimeFormat("es", {
     day: "numeric",
@@ -235,6 +434,10 @@ function formatLongDate(value) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function capitalize(value) {
+  return value ? value.charAt(0).toLocaleUpperCase() + value.slice(1) : value;
 }
 
 function escapeHtml(value) {
@@ -263,7 +466,6 @@ function markdownToHtml(markdown) {
   let code = [];
   let inCode = false;
   let listType = null;
-
   const closeList = () => {
     if (listType) output.push(`</${listType}>`);
     listType = null;
@@ -283,7 +485,6 @@ function markdownToHtml(markdown) {
       code.push(line);
       continue;
     }
-
     const unordered = line.match(/^\s*[-*]\s+(.+)$/);
     const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
     if (unordered || ordered) {
@@ -297,7 +498,6 @@ function markdownToHtml(markdown) {
       continue;
     }
     closeList();
-
     if (!line.trim()) continue;
     if (/^\s*---+\s*$/.test(line)) output.push("<hr>");
     else if (line.startsWith("### ")) output.push(`<h3>${renderInline(line.slice(4))}</h3>`);
@@ -306,7 +506,6 @@ function markdownToHtml(markdown) {
     else if (line.startsWith("> ")) output.push(`<blockquote>${renderInline(line.slice(2))}</blockquote>`);
     else output.push(`<p>${renderInline(line)}</p>`);
   }
-
   closeList();
   if (inCode && code.length) output.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
   return output.join("\n");
@@ -326,7 +525,7 @@ function setSaveStatus(message) {
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   elements.themeMeta.content = theme === "dark" ? "#20211e" : "#f7f5f0";
-  localStorage.setItem("notas-theme", theme);
+  localStorage.setItem("plainjot-theme", theme);
 }
 
 function toggleTheme() {
@@ -341,33 +540,65 @@ function showToast(message) {
   toastTimer = setTimeout(() => elements.toast.classList.remove("visible"), 2800);
 }
 
-document.querySelector("#new-note").addEventListener("click", createNote);
-document.querySelector("#empty-new-note").addEventListener("click", createNote);
+async function refreshFromFilesystem() {
+  if (state.saveTimer || state.saving || state.loadingDocument) {
+    scheduleFilesystemRefresh();
+    return;
+  }
+  const previousRevision = state.current?.revision;
+  const selectedId = state.selectedId;
+  await loadCollections();
+  if (!selectedId || state.selectedId !== selectedId) return;
+  try {
+    const document = await api(`/api/documents/${encodeURIComponent(selectedId)}`);
+    if (document.revision !== previousRevision) showDocument(document);
+  } catch (error) {
+    if (error.status === 404) clearEditor();
+    else showToast(error.message);
+  }
+}
+
+function scheduleFilesystemRefresh() {
+  clearTimeout(state.externalTimer);
+  state.externalTimer = setTimeout(refreshFromFilesystem, 180);
+}
+
+window.__plainjotFilesChanged = scheduleFilesystemRefresh;
+
+elements.newItem.addEventListener("click", createForCurrentSection);
+elements.emptyButton.addEventListener("click", createForCurrentSection);
 document.querySelector("#delete-note").addEventListener("click", deleteCurrent);
 document.querySelector("#theme-toggle").addEventListener("click", toggleTheme);
-elements.writeTab.addEventListener("click", () => setView("write"));
-elements.previewTab.addEventListener("click", () => setView("preview"));
 document.querySelector("#refresh").addEventListener("click", async () => {
   await flushSave();
-  await loadNotes();
-  showToast("Notas actualizadas desde la carpeta");
+  await refreshFromFilesystem();
+  showToast("Carpeta actualizada");
 });
+elements.taskAction.addEventListener("click", transitionTask);
+elements.writeTab.addEventListener("click", () => setView("write"));
+elements.previewTab.addEventListener("click", () => setView("preview"));
 elements.search.addEventListener("input", renderList);
 elements.title.addEventListener("input", scheduleSave);
 elements.body.addEventListener("input", scheduleSave);
+document.querySelectorAll(".section-button").forEach((button) => {
+  button.addEventListener("click", () => changeSection(button.dataset.section));
+});
 
 document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;
-  if (modifier && event.key.toLowerCase() === "n") {
+  if (modifier && event.shiftKey && event.key.toLowerCase() === "n") {
     event.preventDefault();
-    createNote();
+    createTask();
+  } else if (modifier && event.key.toLowerCase() === "n") {
+    event.preventDefault();
+    createForCurrentSection();
   } else if (modifier && event.key.toLowerCase() === "k") {
     event.preventDefault();
     elements.search.focus();
     elements.search.select();
   } else if (modifier && event.key.toLowerCase() === "s") {
     event.preventDefault();
-    flushSave().then(() => showToast("Nota guardada"));
+    flushSave().then(() => showToast("Documento guardado"));
   } else if (modifier && event.shiftKey && event.key.toLowerCase() === "p" && state.selectedId) {
     event.preventDefault();
     setView(state.view === "write" ? "preview" : "write");
@@ -378,7 +609,7 @@ window.addEventListener("beforeunload", () => {
   if (state.saveTimer) saveCurrent();
 });
 
-const savedTheme = localStorage.getItem("notas-theme");
+const savedTheme = localStorage.getItem("plainjot-theme") || localStorage.getItem("notas-theme");
 const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 applyTheme(savedTheme || preferredTheme);
-loadNotes();
+loadCollections();

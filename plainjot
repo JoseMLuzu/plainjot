@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Run PlainJot's CLI from a source checkout or ~/.local/bin."""
+
+import sys
+from pathlib import Path
+
+installed_package = Path(__file__).resolve().parent.parent / "share" / "plainjot"
+if installed_package.is_dir():
+    sys.path.insert(0, str(installed_package))
+
+from plainjot_core.cli import main
+
+
+if __name__ == "__main__":
+    main()

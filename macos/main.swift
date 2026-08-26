@@ -3,208 +3,11 @@
 import Foundation
 import Darwin
 
-struct StoreFailure: LocalizedError {
-    let status: Int
-    let message: String
-
-    var errorDescription: String? { message }
-}
-
-final class NotesStore {
-    let directoryURL: URL
-    private let fileManager = FileManager.default
-    private let dateFormatter: ISO8601DateFormatter
-
-    init(directoryURL: URL) throws {
-        self.directoryURL = directoryURL.standardizedFileURL
-        self.dateFormatter = ISO8601DateFormatter()
-        self.dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        try fileManager.createDirectory(at: self.directoryURL, withIntermediateDirectories: true)
-    }
-
-    func route(method: String, path: String, body: Any?) throws -> (status: Int, body: Any?) {
-        if method == "GET" && path == "/api/notes" {
-            return (200, try listNotes())
-        }
-        if method == "POST" && path == "/api/notes" {
-            let fields = try noteFields(from: body)
-            return (201, try createNote(title: fields.title, body: fields.body))
-        }
-
-        let prefix = "/api/notes/"
-        guard path.hasPrefix(prefix) else {
-            throw StoreFailure(status: 404, message: "Ruta no encontrada")
-        }
-        let encodedID = String(path.dropFirst(prefix.count))
-        guard let noteID = encodedID.removingPercentEncoding else {
-            throw StoreFailure(status: 400, message: "Nombre de nota no válido")
-        }
-
-        switch method {
-        case "GET":
-            return (200, try getNote(noteID))
-        case "PUT":
-            let fields = try noteFields(from: body)
-            return (200, try updateNote(noteID, title: fields.title, body: fields.body))
-        case "DELETE":
-            try deleteNote(noteID)
-            return (204, nil)
-        default:
-            throw StoreFailure(status: 405, message: "Método no permitido")
-        }
-    }
-
-    func listNotes() throws -> [[String: Any]] {
-        let keys: [URLResourceKey] = [.isRegularFileKey, .contentModificationDateKey]
-        let files = try fileManager.contentsOfDirectory(
-            at: directoryURL,
-            includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles]
-        )
-
-        var notes: [[String: Any]] = []
-        for fileURL in files where fileURL.pathExtension.lowercased() == "md" {
-            guard isValidNoteID(fileURL.lastPathComponent) else { continue }
-            let values = try fileURL.resourceValues(forKeys: Set(keys))
-            guard values.isRegularFile == true else { continue }
-            guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
-            let parts = splitMarkdown(fileURL: fileURL, content: content)
-            let preview = parts.body
-                .replacingOccurrences(of: "#", with: "")
-                .components(separatedBy: .whitespacesAndNewlines)
-                .filter { !$0.isEmpty }
-                .joined(separator: " ")
-
-            let modified = values.contentModificationDate ?? Date.distantPast
-            notes.append([
-                "id": fileURL.lastPathComponent,
-                "title": parts.title,
-                "preview": String(preview.prefix(140)),
-                "modified": dateFormatter.string(from: modified),
-            ])
-        }
-
-        return notes.sorted {
-            guard let left = $0["modified"] as? String, let right = $1["modified"] as? String else {
-                return false
-            }
-            return left > right
-        }
-    }
-
-    func getNote(_ noteID: String) throws -> [String: Any] {
-        let fileURL = try fileURL(for: noteID)
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            throw StoreFailure(status: 404, message: "La nota no existe")
-        }
-        let content = try String(contentsOf: fileURL, encoding: .utf8)
-        let parts = splitMarkdown(fileURL: fileURL, content: content)
-        return ["id": noteID, "title": parts.title, "body": parts.body]
-    }
-
-    func createNote(title: String, body: String) throws -> [String: Any] {
-        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "Sin título"
-            : title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let noteID = "\(slugify(cleanTitle))-\(UUID().uuidString.lowercased().prefix(7)).md"
-        let fileURL = try fileURL(for: noteID)
-        try renderMarkdown(title: cleanTitle, body: body).write(to: fileURL, atomically: true, encoding: .utf8)
-        return try getNote(noteID)
-    }
-
-    func updateNote(_ noteID: String, title: String, body: String) throws -> [String: Any] {
-        let fileURL = try fileURL(for: noteID)
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            throw StoreFailure(status: 404, message: "La nota no existe")
-        }
-        try renderMarkdown(title: title, body: body).write(to: fileURL, atomically: true, encoding: .utf8)
-        return try getNote(noteID)
-    }
-
-    func deleteNote(_ noteID: String) throws {
-        let fileURL = try fileURL(for: noteID)
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            throw StoreFailure(status: 404, message: "La nota no existe")
-        }
-        try fileManager.removeItem(at: fileURL)
-    }
-
-    private func noteFields(from value: Any?) throws -> (title: String, body: String) {
-        guard
-            let payload = value as? [String: Any],
-            let title = payload["title"] as? String,
-            let body = payload["body"] as? String
-        else {
-            throw StoreFailure(status: 400, message: "Título y contenido deben ser texto")
-        }
-        guard title.count <= 200 else {
-            throw StoreFailure(status: 400, message: "El título es demasiado largo")
-        }
-        return (title, body)
-    }
-
-    private func fileURL(for noteID: String) throws -> URL {
-        guard isValidNoteID(noteID) else {
-            throw StoreFailure(status: 400, message: "Nombre de nota no válido")
-        }
-        let candidate = directoryURL.appendingPathComponent(noteID, isDirectory: false).standardizedFileURL
-        guard candidate.deletingLastPathComponent() == directoryURL else {
-            throw StoreFailure(status: 400, message: "Ruta de nota no válida")
-        }
-        return candidate
-    }
-
-    private func isValidNoteID(_ noteID: String) -> Bool {
-        noteID.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]*\\.md$", options: .regularExpression) != nil
-    }
-
-    private func splitMarkdown(fileURL: URL, content: String) -> (title: String, body: String) {
-        var lines = content.components(separatedBy: .newlines)
-        while lines.last == "" { lines.removeLast() }
-
-        if let first = lines.first, first.hasPrefix("# ") {
-            let title = String(first.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
-            lines.removeFirst()
-            if lines.first == "" { lines.removeFirst() }
-            return (title.isEmpty ? fileURL.deletingPathExtension().lastPathComponent : title, lines.joined(separator: "\n"))
-        }
-
-        let fallback = fileURL.deletingPathExtension().lastPathComponent
-            .replacingOccurrences(of: "-", with: " ")
-            .capitalized
-        return (fallback, lines.joined(separator: "\n"))
-    }
-
-    private func renderMarkdown(title: String, body: String) -> String {
-        let titleWords = title
-            .replacingOccurrences(of: "\r", with: " ")
-            .replacingOccurrences(of: "\n", with: " ")
-            .components(separatedBy: .whitespaces)
-            .filter { !$0.isEmpty }
-        let safeTitle = titleWords.isEmpty ? "Sin título" : titleWords.joined(separator: " ")
-        let cleanBody = body
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-            .trimmingCharacters(in: .newlines)
-        return "# \(safeTitle)\n\n\(cleanBody)\n"
-    }
-
-    private func slugify(_ value: String) -> String {
-        let folded = value
-            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "es"))
-            .lowercased()
-        let slug = folded
-            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return String((slug.isEmpty ? "nota" : slug).prefix(60))
-    }
-}
-
 final class NotesBridge: NSObject, WKScriptMessageHandler {
-    private let store: NotesStore
+    private let store: PlainJotStore
     weak var webView: WKWebView?
 
-    init(store: NotesStore) {
+    init(store: PlainJotStore) {
         self.store = store
     }
 
@@ -228,7 +31,7 @@ final class NotesBridge: NSObject, WKScriptMessageHandler {
         } catch let failure as StoreFailure {
             resolve(id: id, status: failure.status, body: ["error": failure.message])
         } catch {
-            resolve(id: id, status: 500, body: ["error": "No se pudo acceder a las notas"])
+            resolve(id: id, status: 500, body: ["error": "No se pudo acceder a la carpeta PlainJot"])
         }
     }
 
@@ -263,15 +66,40 @@ final class NavigationDelegate: NSObject, WKNavigationDelegate {
     }
 }
 
+final class JavaScriptDialogDelegate: NSObject, WKUIDelegate {
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptConfirmPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Eliminar")
+        alert.addButton(withTitle: "Cancelar")
+
+        guard let window = webView.window else {
+            completionHandler(alert.runModal() == .alertFirstButtonReturn)
+            return
+        }
+        alert.beginSheetModal(for: window) { response in
+            completionHandler(response == .alertFirstButtonReturn)
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var webView: WKWebView?
     private var bridge: NotesBridge?
+    private var directoryWatcher: DirectoryWatcher?
     private let navigationDelegate = NavigationDelegate()
+    private let javaScriptDialogDelegate = JavaScriptDialogDelegate()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
-            try createApplicationMenu()
+            createApplicationMenu()
             try createWindow()
             NSApplication.shared.activate(ignoringOtherApps: true)
         } catch {
@@ -286,11 +114,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        directoryWatcher?.stop()
+    }
+
     @objc private func createNewNote(_ sender: Any?) {
         webView?.evaluateJavaScript("createNote();")
     }
 
-    private func createApplicationMenu() throws {
+    @objc private func createNewTask(_ sender: Any?) {
+        webView?.evaluateJavaScript("createTask();")
+    }
+
+    private func createApplicationMenu() {
         let mainMenu = NSMenu()
 
         let appItem = NSMenuItem()
@@ -303,9 +139,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "Archivo")
-        let newItem = NSMenuItem(title: "Nueva nota", action: #selector(createNewNote(_:)), keyEquivalent: "n")
-        newItem.target = self
-        fileMenu.addItem(newItem)
+        let newNote = NSMenuItem(title: "Nueva nota", action: #selector(createNewNote(_:)), keyEquivalent: "n")
+        newNote.target = self
+        fileMenu.addItem(newNote)
+        let newTask = NSMenuItem(title: "Nueva tarea", action: #selector(createNewTask(_:)), keyEquivalent: "n")
+        newTask.keyEquivalentModifierMask = [.command, .shift]
+        newTask.target = self
+        fileMenu.addItem(newTask)
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
 
@@ -314,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func createWindow() throws {
         let notesDirectory = preferredNotesDirectory()
-        let store = try NotesStore(directoryURL: notesDirectory)
+        let store = try PlainJotStore(directoryURL: notesDirectory)
 
         guard
             let webDirectory = Bundle.main.resourceURL?.appendingPathComponent("Web", isDirectory: true),
@@ -337,8 +177,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = navigationDelegate
+        webView.uiDelegate = javaScriptDialogDelegate
         notesBridge.webView = webView
         webView.loadFileURL(indexURL, allowingReadAccessTo: webDirectory)
+
+        let watcher = DirectoryWatcher(directoryURL: store.directoryURL) { [weak webView] in
+            DispatchQueue.main.async {
+                webView?.evaluateJavaScript("window.__plainjotFilesChanged?.();")
+            }
+        }
+        try watcher.start()
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1120, height: 760),
@@ -353,7 +201,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
 
-        self.bridge = notesBridge
+        directoryWatcher = watcher
+        bridge = notesBridge
         self.webView = webView
         self.window = window
     }
@@ -377,43 +226,132 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+private func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
+    guard condition() else { throw StoreFailure(status: 500, message: message) }
+}
+
+private func requireStoreFailure(status: Int, _ operation: () throws -> Void) throws {
+    do {
+        try operation()
+        throw StoreFailure(status: 500, message: "Se esperaba un error controlado")
+    } catch let failure as StoreFailure where failure.status == status {
+        return
+    }
+}
+
 func runSelfTest() throws {
     let testDirectory = FileManager.default.temporaryDirectory
         .appendingPathComponent("plainjot-self-test-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: testDirectory) }
 
-    let store = try NotesStore(directoryURL: testDirectory)
+    let store = try PlainJotStore(directoryURL: testDirectory)
     let created = try store.route(
         method: "POST",
         path: "/api/notes",
         body: ["title": "Prueba nativa", "body": "Contenido local"]
     )
-    guard
-        created.status == 201,
-        let note = created.body as? [String: Any],
-        let noteID = note["id"] as? String
-    else {
+    guard let note = created.body as? [String: Any], let noteID = note["id"] as? String else {
         throw StoreFailure(status: 500, message: "Falló la creación nativa")
     }
-
-    let listed = try store.route(method: "GET", path: "/api/notes", body: nil)
-    guard let notes = listed.body as? [[String: Any]], notes.count == 1 else {
-        throw StoreFailure(status: 500, message: "Falló el listado nativo")
+    try require(created.status == 201, "Estado incorrecto al crear una nota")
+    try requireStoreFailure(status: 400) {
+        _ = try store.getDocument("../outside.md")
     }
+
+    let outsideURL = testDirectory.deletingLastPathComponent()
+        .appendingPathComponent("plainjot-outside-\(UUID().uuidString).md")
+    let linkedURL = testDirectory.appendingPathComponent("linked.md")
+    try "# Outside\n".write(to: outsideURL, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: outsideURL) }
+    try FileManager.default.createSymbolicLink(at: linkedURL, withDestinationURL: outsideURL)
+    try requireStoreFailure(status: 400) {
+        _ = try store.getDocument("linked.md")
+    }
+    try FileManager.default.removeItem(at: linkedURL)
+
+    let conflict = try store.createNote(title: "Conflicto", body: "Versión local")
+    guard let conflictID = conflict["id"] as? String, let revision = conflict["revision"] as? String else {
+        throw StoreFailure(status: 500, message: "Falló la preparación del conflicto")
+    }
+    let conflictURL = testDirectory.appendingPathComponent(conflictID)
+    try "# Conflicto\n\nVersión externa más larga.\n".write(to: conflictURL, atomically: true, encoding: .utf8)
+    try requireStoreFailure(status: 409) {
+        _ = try store.updateDocument(
+            conflictID,
+            title: "Conflicto",
+            body: "No sobrescribir",
+            expectedRevision: revision
+        )
+    }
+    let conflictContents = try String(contentsOf: conflictURL, encoding: .utf8)
+    try require(conflictContents.contains("Versión externa"), "Se sobrescribió un cambio externo")
+
+    let taskResponse = try store.route(
+        method: "POST",
+        path: "/api/tasks",
+        body: [
+            "title": "Tarea desde agente",
+            "body": "Contenido Markdown",
+            "project": "plainjot",
+            "source": "codex",
+        ]
+    )
+    guard let task = taskResponse.body as? [String: Any], let taskID = task["id"] as? String else {
+        throw StoreFailure(status: 500, message: "Falló la creación de tareas")
+    }
+    try require(task["status"] as? String == "inbox", "La tarea no entró en Inbox")
+
+    let externalURL = testDirectory.appendingPathComponent("external-task.md")
+    let externalTask = """
+    ---
+    type: task
+    status: inbox
+    project: external
+    source: claude-code
+    created: 2026-08-24T22:30:00Z
+    completed:
+    ---
+
+    # External task
+
+    Written outside the app.
+    """
+    try externalTask.write(to: externalURL, atomically: true, encoding: .utf8)
+    let tasks = try store.listTasks()
+    try require(tasks.count == 2, "No se detectó la tarea externa")
+
+    let todo = try store.route(
+        method: "PATCH",
+        path: "/api/tasks/\(taskID)",
+        body: ["status": "todo"]
+    )
+    try require((todo.body as? [String: Any])?["status"] as? String == "todo", "Falló inbox → todo")
+    let done = try store.route(
+        method: "PATCH",
+        path: "/api/tasks/\(taskID)",
+        body: ["status": "done"]
+    )
+    try require((done.body as? [String: Any])?["status"] as? String == "done", "Falló todo → done")
+
+    let watcherSignal = DispatchSemaphore(value: 0)
+    let watcher = DirectoryWatcher(directoryURL: testDirectory, debounceInterval: .milliseconds(80)) {
+        watcherSignal.signal()
+    }
+    try watcher.start()
+    let watchedURL = testDirectory.appendingPathComponent("watched-note.md")
+    try "# Watched\n\nExternal change.\n".write(to: watchedURL, atomically: true, encoding: .utf8)
+    try require(watcherSignal.wait(timeout: .now() + 3) == .success, "El filesystem watcher no respondió")
+    watcher.stop()
 
     let updated = try store.route(
         method: "PUT",
-        path: "/api/notes/\(noteID)",
+        path: "/api/documents/\(noteID)",
         body: ["title": "Prueba actualizada", "body": "Nuevo contenido"]
     )
-    guard let updatedNote = updated.body as? [String: Any], updatedNote["title"] as? String == "Prueba actualizada" else {
-        throw StoreFailure(status: 500, message: "Falló la edición nativa")
-    }
+    try require((updated.body as? [String: Any])?["title"] as? String == "Prueba actualizada", "Falló la edición nativa")
 
-    _ = try store.route(method: "DELETE", path: "/api/notes/\(noteID)", body: nil)
-    guard try store.listNotes().isEmpty else {
-        throw StoreFailure(status: 500, message: "Falló el borrado nativo")
-    }
+    _ = try store.route(method: "DELETE", path: "/api/documents/\(noteID)", body: nil)
+    try require(!FileManager.default.fileExists(atPath: testDirectory.appendingPathComponent(noteID).path), "Falló el borrado nativo")
     print("Prueba nativa completada correctamente")
 }
 

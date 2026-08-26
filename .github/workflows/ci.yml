@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test Python core, server, and CLI
+        run: python -m unittest -v
+      - name: Validate shared JavaScript
+        run: node --check static/app.js
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Python storage on macOS
+        run: python3 -m unittest -v
+      - name: Validate app metadata
+        run: plutil -lint macos/Info.plist
+      - name: Build macOS app
+        run: ./scripts/build_macos_app.sh
+      - name: Run native self-test
+        run: ./dist/PlainJot.app/Contents/MacOS/PlainJot --self-test
+      - name: Verify app signature
+        run: codesign --verify --deep --strict --verbose=2 dist/PlainJot.app
+      - name: Package downloadable archive
+        run: ./scripts/package_release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlainJot-macOS
+          path: dist/PlainJot-*-macOS.zip
+          if-no-files-found: error

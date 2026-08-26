@@ -1,214 +1,207 @@
 #!/usr/bin/env python3
-"""Servidor local, sin dependencias, para una carpeta de notas Markdown."""
+"""Dependency-free development server for PlainJot's shared frontend."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import mimetypes
-import re
 import threading
-import unicodedata
-import uuid
 import webbrowser
-from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+
+from plainjot_core import (
+    ConflictError,
+    InvalidDocument,
+    PlainJotStore,
+    default_notes_dir,
+    parse_markdown,
+    render_markdown,
+    slugify,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
-PREFERRED_NOTES_DIR = Path.home() / "Documents" / "PlainJot"
-LEGACY_NOTES_DIR = Path.home() / "Documents" / "NotasLocal"
 MAX_BODY_BYTES = 2 * 1024 * 1024
-VALID_NOTE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
 
-
-def slugify(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_value).strip("-").lower()
-    return slug[:60] or "nota"
+# Compatibility aliases for the original public Python API and tests.
+NotesStore = PlainJotStore
 
 
 def split_markdown(path: Path, content: str) -> tuple[str, str]:
-    lines = content.splitlines()
-    if lines and lines[0].startswith("# "):
-        title = lines[0][2:].strip() or path.stem
-        body_lines = lines[1:]
-        if body_lines and body_lines[0] == "":
-            body_lines = body_lines[1:]
-        return title, "\n".join(body_lines)
-    return path.stem.replace("-", " ").strip().title(), content
+    title, body, _, _ = parse_markdown(path, content)
+    return title, body
 
 
-def render_markdown(title: str, body: str) -> str:
-    safe_title = " ".join(title.replace("\r", " ").replace("\n", " ").split())
-    safe_title = safe_title or "Sin título"
-    clean_body = body.replace("\r\n", "\n").replace("\r", "\n")
-    return f"# {safe_title}\n\n{clean_body.rstrip()}\n"
-
-
-class NotesStore:
-    def __init__(self, notes_dir: Path):
-        self.notes_dir = notes_dir.expanduser().resolve()
-        self.notes_dir.mkdir(parents=True, exist_ok=True)
-
-    def _path_for(self, note_id: str) -> Path:
-        if not VALID_NOTE_NAME.fullmatch(note_id):
-            raise ValueError("Nombre de nota no válido")
-        path = (self.notes_dir / note_id).resolve()
-        if path.parent != self.notes_dir:
-            raise ValueError("Ruta de nota no válida")
-        return path
-
-    def list_notes(self) -> list[dict]:
-        notes = []
-        for path in self.notes_dir.glob("*.md"):
-            if not path.is_file() or not VALID_NOTE_NAME.fullmatch(path.name):
-                continue
-            try:
-                content = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            title, body = split_markdown(path, content)
-            stat = path.stat()
-            preview = " ".join(body.replace("#", "").split())[:140]
-            notes.append(
-                {
-                    "id": path.name,
-                    "title": title,
-                    "preview": preview,
-                    "modified": datetime.fromtimestamp(
-                        stat.st_mtime, tz=timezone.utc
-                    ).isoformat(),
-                }
-            )
-        return sorted(notes, key=lambda note: note["modified"], reverse=True)
-
-    def get_note(self, note_id: str) -> dict:
-        path = self._path_for(note_id)
-        if not path.is_file():
-            raise FileNotFoundError(note_id)
-        content = path.read_text(encoding="utf-8")
-        title, body = split_markdown(path, content)
-        return {"id": path.name, "title": title, "body": body}
-
-    def create_note(self, title: str, body: str) -> dict:
-        title = title.strip() or "Sin título"
-        note_id = f"{slugify(title)}-{uuid.uuid4().hex[:7]}.md"
-        path = self._path_for(note_id)
-        self._atomic_write(path, render_markdown(title, body))
-        return self.get_note(note_id)
-
-    def update_note(self, note_id: str, title: str, body: str) -> dict:
-        path = self._path_for(note_id)
-        if not path.is_file():
-            raise FileNotFoundError(note_id)
-        self._atomic_write(path, render_markdown(title, body))
-        return self.get_note(note_id)
-
-    def delete_note(self, note_id: str) -> None:
-        path = self._path_for(note_id)
-        if not path.is_file():
-            raise FileNotFoundError(note_id)
-        path.unlink()
-
-    @staticmethod
-    def _atomic_write(path: Path, content: str) -> None:
-        temporary = path.with_suffix(".md.tmp")
-        temporary.write_text(content, encoding="utf-8")
-        temporary.replace(path)
-
-
-def make_handler(store: NotesStore):
-    class NotesHandler(BaseHTTPRequestHandler):
-        server_version = "PlainJot/1.0"
+def make_handler(store: PlainJotStore):
+    class PlainJotHandler(BaseHTTPRequestHandler):
+        server_version = "PlainJot/0.2"
 
         def do_GET(self) -> None:
-            route = urlparse(self.path).path
+            parsed = urlparse(self.path)
+            route = parsed.path
             if route == "/api/notes":
                 self._send_json(store.list_notes())
                 return
-            if route.startswith("/api/notes/"):
-                self._handle_get_note(unquote(route.removeprefix("/api/notes/")))
+            if route == "/api/tasks":
+                self._send_json(store.list_tasks())
+                return
+            if route == "/api/search":
+                query = parse_qs(parsed.query).get("q", [""])[0]
+                self._send_json(store.search(query))
+                return
+            document_id = self._id_after(route, "/api/documents/")
+            if document_id is None:
+                document_id = self._id_after(route, "/api/notes/")
+            if document_id is not None:
+                self._with_store(lambda: store.get_document(document_id))
                 return
             self._serve_static(route)
 
         def do_POST(self) -> None:
-            if urlparse(self.path).path != "/api/notes":
-                self._send_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada")
-                return
+            route = urlparse(self.path).path
             payload = self._read_json()
             if payload is None:
                 return
-            title, body = self._note_fields(payload)
-            if title is None:
+            fields = self._document_fields(payload)
+            if fields is None:
                 return
-            self._send_json(store.create_note(title, body), HTTPStatus.CREATED)
+            title, body = fields
+            if route == "/api/notes":
+                self._with_store(lambda: store.create_note(title, body), HTTPStatus.CREATED)
+                return
+            if route == "/api/tasks":
+                status = payload.get("status", "inbox")
+                project = payload.get("project", "")
+                source = payload.get("source", "")
+                if not all(isinstance(value, str) for value in (status, project, source)):
+                    self._send_error(HTTPStatus.BAD_REQUEST, "Task metadata must be text")
+                    return
+                self._with_store(
+                    lambda: store.create_task(
+                        title,
+                        body,
+                        status=status,
+                        project=project,
+                        source=source,
+                    ),
+                    HTTPStatus.CREATED,
+                )
+                return
+            self._send_error(HTTPStatus.NOT_FOUND, "Route not found")
 
         def do_PUT(self) -> None:
             route = urlparse(self.path).path
-            if not route.startswith("/api/notes/"):
-                self._send_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada")
+            document_id = self._id_after(route, "/api/documents/")
+            if document_id is None:
+                document_id = self._id_after(route, "/api/notes/")
+            if document_id is None:
+                self._send_error(HTTPStatus.NOT_FOUND, "Route not found")
                 return
             payload = self._read_json()
             if payload is None:
                 return
-            title, body = self._note_fields(payload)
-            if title is None:
+            fields = self._document_fields(payload)
+            if fields is None:
                 return
-            note_id = unquote(route.removeprefix("/api/notes/"))
-            try:
-                note = store.update_note(note_id, title, body)
-            except FileNotFoundError:
-                self._send_error(HTTPStatus.NOT_FOUND, "La nota no existe")
+            expected = payload.get("expected_revision")
+            if expected is not None and not isinstance(expected, str):
+                self._send_error(HTTPStatus.BAD_REQUEST, "Revision must be text")
                 return
-            except ValueError as error:
-                self._send_error(HTTPStatus.BAD_REQUEST, str(error))
+            self._with_store(
+                lambda: store.update_document(
+                    document_id,
+                    fields[0],
+                    fields[1],
+                    expected_revision=expected,
+                )
+            )
+
+        def do_PATCH(self) -> None:
+            route = urlparse(self.path).path
+            document_id = self._id_after(route, "/api/tasks/")
+            if document_id is None:
+                self._send_error(HTTPStatus.NOT_FOUND, "Route not found")
                 return
-            self._send_json(note)
+            payload = self._read_json()
+            if payload is None:
+                return
+            status = payload.get("status")
+            expected = payload.get("expected_revision")
+            if not isinstance(status, str) or (expected is not None and not isinstance(expected, str)):
+                self._send_error(HTTPStatus.BAD_REQUEST, "Status and revision must be text")
+                return
+            self._with_store(
+                lambda: store.update_task_status(
+                    document_id,
+                    status,
+                    expected_revision=expected,
+                )
+            )
 
         def do_DELETE(self) -> None:
             route = urlparse(self.path).path
-            if not route.startswith("/api/notes/"):
-                self._send_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada")
+            document_id = self._id_after(route, "/api/documents/")
+            if document_id is None:
+                document_id = self._id_after(route, "/api/notes/")
+            if document_id is None:
+                self._send_error(HTTPStatus.NOT_FOUND, "Route not found")
                 return
-            note_id = unquote(route.removeprefix("/api/notes/"))
             try:
-                store.delete_note(note_id)
-            except FileNotFoundError:
-                self._send_error(HTTPStatus.NOT_FOUND, "La nota no existe")
+                has_body = int(self.headers.get("Content-Length", "0")) > 0
+            except ValueError:
+                self._send_error(HTTPStatus.BAD_REQUEST, "Invalid request size")
                 return
-            except ValueError as error:
-                self._send_error(HTTPStatus.BAD_REQUEST, str(error))
+            payload = self._read_json() if has_body else {}
+            if payload is None:
                 return
-            self.send_response(HTTPStatus.NO_CONTENT)
-            self.end_headers()
+            expected = payload.get("expected_revision")
+            if expected is not None and not isinstance(expected, str):
+                self._send_error(HTTPStatus.BAD_REQUEST, "Revision must be text")
+                return
+            self._with_store(
+                lambda: store.delete_document(document_id, expected_revision=expected),
+                HTTPStatus.NO_CONTENT,
+            )
 
-        def _handle_get_note(self, note_id: str) -> None:
+        @staticmethod
+        def _id_after(route: str, prefix: str) -> str | None:
+            if not route.startswith(prefix):
+                return None
+            return unquote(route.removeprefix(prefix))
+
+        def _with_store(self, operation, status: HTTPStatus = HTTPStatus.OK) -> None:
             try:
-                note = store.get_note(note_id)
+                result = operation()
             except FileNotFoundError:
-                self._send_error(HTTPStatus.NOT_FOUND, "La nota no existe")
-                return
-            except ValueError as error:
+                self._send_error(HTTPStatus.NOT_FOUND, "Document does not exist")
+            except ConflictError as error:
+                self._send_error(HTTPStatus.CONFLICT, str(error))
+            except InvalidDocument as error:
                 self._send_error(HTTPStatus.BAD_REQUEST, str(error))
-                return
-            self._send_json(note)
+            except OSError:
+                self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Could not access the notes directory")
+            else:
+                if status == HTTPStatus.NO_CONTENT:
+                    self.send_response(status)
+                    self.end_headers()
+                else:
+                    self._send_json(result, status)
 
         def _serve_static(self, route: str) -> None:
             filename = "index.html" if route in ("", "/") else route.lstrip("/")
             if filename not in {"index.html", "app.js", "style.css"}:
-                self._send_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada")
+                self._send_error(HTTPStatus.NOT_FOUND, "Route not found")
                 return
             path = STATIC_DIR / filename
             try:
                 content = path.read_bytes()
             except OSError:
-                self._send_error(HTTPStatus.NOT_FOUND, "Archivo no encontrado")
+                self._send_error(HTTPStatus.NOT_FOUND, "File not found")
                 return
             content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             self.send_response(HTTPStatus.OK)
@@ -222,30 +215,27 @@ def make_handler(store: NotesStore):
             try:
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError:
-                self._send_error(HTTPStatus.BAD_REQUEST, "Tamaño de solicitud inválido")
+                self._send_error(HTTPStatus.BAD_REQUEST, "Invalid request size")
                 return None
             if length <= 0 or length > MAX_BODY_BYTES:
-                self._send_error(HTTPStatus.BAD_REQUEST, "Solicitud vacía o demasiado grande")
+                self._send_error(HTTPStatus.BAD_REQUEST, "Request is empty or too large")
                 return None
             try:
                 payload = json.loads(self.rfile.read(length))
             except (json.JSONDecodeError, UnicodeDecodeError):
-                self._send_error(HTTPStatus.BAD_REQUEST, "JSON inválido")
+                self._send_error(HTTPStatus.BAD_REQUEST, "Invalid JSON")
                 return None
             if not isinstance(payload, dict):
-                self._send_error(HTTPStatus.BAD_REQUEST, "El contenido debe ser un objeto")
+                self._send_error(HTTPStatus.BAD_REQUEST, "Payload must be an object")
                 return None
             return payload
 
-        def _note_fields(self, payload: dict) -> tuple[str | None, str]:
+        def _document_fields(self, payload: dict) -> tuple[str, str] | None:
             title = payload.get("title", "")
             body = payload.get("body", "")
             if not isinstance(title, str) or not isinstance(body, str):
-                self._send_error(HTTPStatus.BAD_REQUEST, "Título y contenido deben ser texto")
-                return None, ""
-            if len(title) > 200:
-                self._send_error(HTTPStatus.BAD_REQUEST, "El título es demasiado largo")
-                return None, ""
+                self._send_error(HTTPStatus.BAD_REQUEST, "Title and body must be text")
+                return None
             return title, body
 
         def _send_json(self, payload, status: HTTPStatus = HTTPStatus.OK) -> None:
@@ -262,46 +252,35 @@ def make_handler(store: NotesStore):
         def log_message(self, format: str, *args) -> None:
             return
 
-    return NotesHandler
+    return PlainJotHandler
 
 
 class LocalServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-def default_notes_dir() -> Path:
-    """Use PlainJot's folder and migrate the previous app folder when possible."""
-    if PREFERRED_NOTES_DIR.exists() or not LEGACY_NOTES_DIR.is_dir():
-        return PREFERRED_NOTES_DIR
-    try:
-        LEGACY_NOTES_DIR.replace(PREFERRED_NOTES_DIR)
-    except OSError:
-        return LEGACY_NOTES_DIR
-    return PREFERRED_NOTES_DIR
-
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="PlainJot, notas Markdown locales")
+    parser = argparse.ArgumentParser(description="PlainJot development server")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--notes-dir", type=Path, default=default_notes_dir())
+    parser.add_argument("--notes-dir", type=Path, default=None)
     parser.add_argument("--no-browser", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    store = NotesStore(args.notes_dir)
+    store = PlainJotStore(args.notes_dir or default_notes_dir())
     server = LocalServer(("127.0.0.1", args.port), make_handler(store))
     url = f"http://127.0.0.1:{args.port}"
-    print(f"PlainJot está abierta en {url}")
-    print(f"Tus notas se guardan en {store.notes_dir}")
-    print("Presiona Ctrl+C para cerrar.")
+    print(f"PlainJot is open at {url}")
+    print(f"Your files are stored in {store.notes_dir}")
+    print("Press Ctrl+C to stop.")
     if not args.no_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nCerrando PlainJot…")
+        print("\nClosing PlainJot…")
     finally:
         server.server_close()
 

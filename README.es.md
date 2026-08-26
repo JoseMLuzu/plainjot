@@ -1,73 +1,164 @@
 # PlainJot
 
-> Notes that stay yours.
+**Notas para ti. Memoria para tus agentes.**
 
-PlainJot es una aplicación pequeña y local para guardar notas Markdown. Está pensada para escribir directamente o para pedirle a un agente de programación que guarde información sin mezclarla con Apple Notes.
+Una libreta Markdown y bandeja de tareas local-first para humanos y coding agents.
 
-- Sin cuentas ni base de datos.
-- Sin dependencias externas.
-- Las notas son archivos `.md` normales.
-- Búsqueda, guardado automático, vista previa Markdown y tema claro/oscuro.
-- Aplicación nativa para macOS y servidor web para desarrollo.
+- Local first
+- Archivos Markdown
+- Sin cuentas
+- No requiere cloud
+- Amigable para humanos y agentes
+- Aplicación nativa para macOS
+- Open source
 
-## Aplicación para macOS
+> **Files first. Local first. Agent friendly.**
 
-Requiere macOS 13 o posterior y las herramientas de línea de comandos de Xcode para compilar.
+PlainJot es deliberadamente pequeño. No es un workspace, grafo de conocimiento o gestor de proyectos. Los archivos `.md` dentro de `~/Documents/PlainJot` siempre son la fuente de verdad.
+
+## Qué hace
+
+PlainJot tiene tres secciones sencillas:
+
+- **Notes** para documentos Markdown normales.
+- **Inbox** para tareas creadas por agentes u otras herramientas.
+- **Tasks** para trabajo pendiente y completado.
+
+La app observa la carpeta PlainJot en macOS, por lo que las creaciones, ediciones, renombres y eliminaciones externas aparecen automáticamente. El guardado automático comprueba revisiones para no sobrescribir silenciosamente una edición externa.
+
+## Compilar la app para macOS
+
+Requiere macOS 13 o posterior y las herramientas de línea de comandos de Xcode.
 
 ```bash
 git clone https://github.com/JoseMLuzu/plainjot.git
 cd plainjot
 ./scripts/build_macos_app.sh
+open dist/PlainJot.app
 ```
 
-La aplicación se genera en `dist/PlainJot.app`. Puedes moverla a la carpeta `Applications` y abrirla normalmente; no necesita Python ni un servidor local.
+La aplicación nativa integra la interfaz HTML/CSS/JavaScript compartida dentro de WebKit. No necesita Python para funcionar.
 
-## Dónde se guardan las notas
+## Instalar la CLI
 
-PlainJot usa esta carpeta de forma predeterminada:
+El instalador sin dependencias coloca `plainjot` en `~/.local/bin`:
+
+```bash
+./scripts/install_cli.sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+También puedes ejecutar `./plainjot` directamente desde el repositorio.
+
+```bash
+plainjot add "Mi nota"
+plainjot task "Corregir autenticación"
+plainjot task "Limpiar perfiles" --project outcrew
+plainjot task "Corregir login" --source codex
+plainjot list
+plainjot list --inbox
+plainjot list --tasks
+plainjot search "autenticación"
+plainjot done corregir-aut
+```
+
+La CLI y la aplicación operan exactamente sobre los mismos archivos Markdown.
+
+## Uso con agentes de IA
+
+Cualquier coding agent con permiso para ejecutar comandos locales puede crear una tarea en Inbox:
+
+```bash
+plainjot task "Refactorizar autenticación" \
+  --project my-project \
+  --source codex
+```
+
+Para Claude Code se utiliza el mismo comando con una fuente precisa:
+
+```bash
+plainjot task "Revisar el script de distribución" \
+  --project plainjot \
+  --source claude-code
+```
+
+Otros agentes no necesitan una integración dedicada. Pueden utilizar la CLI o crear directamente un archivo Markdown válido dentro de:
 
 ```text
 ~/Documents/PlainJot
 ```
 
-Cada nota es un archivo Markdown independiente. Por ejemplo, puedes pedirle a un agente:
+Estos flujos dependen únicamente del acceso normal a la terminal y al filesystem. No afirmamos ni requerimos un plugin oficial de Codex o Claude Code.
 
-> Guarda un resumen de esta sesión en `~/Documents/PlainJot/resumen-del-proyecto.md`, usando el título como encabezado `#`.
+## Formato de tareas
 
-Las instalaciones anteriores llamadas “Notas Local” migran automáticamente la carpeta `~/Documents/NotasLocal` cuando es posible.
+Las tareas son archivos Markdown normales con un bloque YAML frontmatter pequeño:
+
+```markdown
+---
+type: task
+status: inbox
+project: plainjot
+source: codex
+created: 2026-08-24T22:30:00Z
+completed:
+---
+
+# Añadir filesystem watcher
+
+Detectar automáticamente cambios Markdown externos.
+```
+
+Los únicos estados compatibles son `inbox`, `todo` y `done`. Las notas anteriores sin frontmatter continúan funcionando.
 
 ## Desarrollo web
 
-La versión web de desarrollo requiere Python 3.10 o posterior y utiliza únicamente la biblioteca estándar:
+El servidor requiere Python 3.10 o posterior y utiliza únicamente la biblioteca estándar:
 
 ```bash
 python3 app.py
 ```
 
-Después abre `http://127.0.0.1:8765`. También puedes elegir otra carpeta o puerto:
+Después abre `http://127.0.0.1:8765`. Para usar archivos temporales durante desarrollo:
 
 ```bash
-python3 app.py --notes-dir ~/Documents/MisNotas --port 9000
+python3 app.py --notes-dir /tmp/plainjot-dev --port 9000
 ```
 
-## Atajos de teclado
+## Arquitectura
 
-- `⌘ N`: crear una nota.
-- `⌘ K`: buscar.
-- `⌘ S`: guardar inmediatamente.
-- `⌘ ⇧ P`: alternar entre escritura y vista previa.
+```text
+Archivos Markdown
+├── Core Python → CLI y servidor de desarrollo
+└── Core Swift  → puente WebKit y filesystem watcher nativo
+                          ↓
+                 HTML / CSS / JavaScript compartido
+```
+
+El Core Python puede reutilizarse en un futuro servidor MCP pequeño. El Core Swift mantiene la app nativa e independiente de Python. Ambos implementan el mismo contrato Markdown sin base de datos ni dependencia YAML.
 
 ## Pruebas
 
 ```bash
 python3 -m unittest -v
+node --check static/app.js
 ./scripts/build_macos_app.sh
 ./dist/PlainJot.app/Contents/MacOS/PlainJot --self-test
 ```
 
-## Contribuciones
+## Build descargable
 
-Los reportes de errores, ideas y pull requests son bienvenidos. Antes de enviar cambios, ejecuta las pruebas y mantén el enfoque de PlainJot: una experiencia sencilla, local y basada en archivos abiertos.
+Crea un zip validado sin publicar una release:
+
+```bash
+./scripts/package_release.sh
+```
+
+El archivo aparece en `dist/`. Los builds de desarrollo usan una firma ad hoc. La distribución pública requiere una firma Apple Developer ID y notarización; el procedimiento manual está en [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md).
+
+## Contribuciones y seguridad
+
+Consulta [CONTRIBUTING.md](CONTRIBUTING.md), [ROADMAP.md](ROADMAP.md) y [SECURITY.md](SECURITY.md). No incluyas notas personales, aplicaciones generadas, credenciales o material de firma en el repositorio.
 
 ## Licencia
 

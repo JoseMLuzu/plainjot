@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a focused improvement that fits PlainJot's philosophy.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Smallest useful solution
+      description: Prefer files-first, local-first ideas over new infrastructure.
+    validations:
+      required: true
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Project fit
+      options:
+        - label: Markdown remains the source of truth.
+          required: true
+        - label: The proposal does not require an account or cloud service.
+          required: true
