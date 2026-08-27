@@ -22,7 +22,9 @@ PlainJot tiene tres secciones sencillas:
 
 - **Notes** para documentos Markdown normales.
 - **Inbox** para tareas creadas por agentes u otras herramientas.
-- **Tasks** para trabajo pendiente y completado.
+- **Tasks** para trabajo pendiente y completado, con un Sprint View opcional de tres columnas.
+
+La lista de tareas sigue siendo la vista predeterminada. Sprint View solo ordena las mismas tareas Markdown como **Inbox**, **Por hacer** y **Hecho**; no añade tableros, metadatos de sprint ni otra fuente de verdad.
 
 La app observa la carpeta PlainJot en macOS, por lo que las creaciones, ediciones, renombres y eliminaciones externas aparecen automáticamente. El guardado automático comprueba revisiones para no sobrescribir silenciosamente una edición externa. Si ambas versiones cambian, PlainJot protege el borrador local y te permite elegir cuál conservar.
 

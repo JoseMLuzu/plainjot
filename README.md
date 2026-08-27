@@ -24,7 +24,9 @@ PlainJot has three quiet sections:
 
 - **Notes** for normal Markdown documents.
 - **Inbox** for tasks created by agents or other tools.
-- **Tasks** for `todo` and completed work.
+- **Tasks** for `todo` and completed work, with an optional three-column Sprint View.
+
+The task list remains the default. Sprint View simply arranges the same Markdown tasks as **Inbox**, **To do**, and **Done**; it does not add boards, sprint metadata, or a separate source of truth.
 
 It watches the PlainJot directory on macOS, so external creates, edits, renames, and deletes appear automatically. Autosave uses revision checks to avoid silently overwriting an external edit. If both versions change, PlainJot protects the local draft and lets you choose which version to keep.
 

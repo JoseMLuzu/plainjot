@@ -12,6 +12,7 @@ const state = {
   conflict: null,
   folder: null,
   view: "write",
+  taskLayout: "list",
 };
 
 const elements = {
@@ -24,6 +25,9 @@ const elements = {
   emptyCopy: document.querySelector("#empty-copy"),
   emptyButton: document.querySelector("#empty-new-item"),
   listHeading: document.querySelector("#list-heading-label"),
+  taskViewToggle: document.querySelector("#task-view-toggle"),
+  sprintBoard: document.querySelector("#sprint-board"),
+  sprintColumns: document.querySelector("#sprint-columns"),
   notesCount: document.querySelector("#notes-count"),
   inboxCount: document.querySelector("#inbox-count"),
   tasksCount: document.querySelector("#tasks-count"),
@@ -238,8 +242,10 @@ async function loadCollections({ preserveSelection = true } = {}) {
     }
     renderNavigation();
     renderList();
+    renderSprintBoard();
     updateDocumentMetadata();
     updateEmptyState();
+    updateWorkspaceMode();
   } catch (error) {
     showToast(error.message);
   }
@@ -249,6 +255,17 @@ function sectionItems() {
   if (state.section === "notes") return state.notes;
   if (state.section === "inbox") return state.tasks.filter((task) => task.status === "inbox");
   return state.tasks.filter((task) => task.status !== "inbox");
+}
+
+function matchesSearch(item) {
+  const query = elements.search.value.trim().toLocaleLowerCase();
+  return `${item.title} ${item.preview} ${item.project || ""} ${item.source || ""}`
+    .toLocaleLowerCase()
+    .includes(query);
+}
+
+function isSprintView() {
+  return state.section === "tasks" && state.taskLayout === "sprint";
 }
 
 function renderNavigation() {
@@ -264,6 +281,12 @@ function renderNavigation() {
     else button.removeAttribute("aria-current");
   });
   elements.listHeading.textContent = state.section === "notes" ? "RECIENTES" : state.section.toUpperCase();
+  elements.taskViewToggle.classList.toggle("hidden", state.section !== "tasks");
+  elements.taskViewToggle.querySelectorAll("button").forEach((button) => {
+    const active = button.dataset.taskLayout === state.taskLayout;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
   const createsNote = state.section === "notes";
   elements.newItem.lastElementChild.textContent = createsNote ? "Nota" : "Tarea";
   elements.newItem.title = createsNote ? "Nueva nota (⌘N)" : "Nueva tarea (⌘⇧N)";
@@ -271,11 +294,7 @@ function renderNavigation() {
 
 function renderList() {
   const query = elements.search.value.trim().toLocaleLowerCase();
-  const items = sectionItems().filter((item) =>
-    `${item.title} ${item.preview} ${item.project || ""} ${item.source || ""}`
-      .toLocaleLowerCase()
-      .includes(query)
-  );
+  const items = sectionItems().filter(matchesSearch);
   elements.list.replaceChildren();
   if (!items.length) {
     const message = document.createElement("p");
@@ -329,6 +348,96 @@ function renderList() {
   }
 }
 
+function renderSprintBoard() {
+  const columns = [
+    { status: "inbox", label: "Inbox", hint: "Por revisar" },
+    { status: "todo", label: "Por hacer", hint: "Trabajo aceptado" },
+    { status: "done", label: "Hecho", hint: "Completado" },
+  ];
+  elements.sprintColumns.replaceChildren();
+
+  for (const definition of columns) {
+    const tasks = state.tasks.filter((task) => task.status === definition.status && matchesSearch(task));
+    const column = document.createElement("section");
+    column.className = `sprint-column sprint-${definition.status}`;
+
+    const header = document.createElement("header");
+    const heading = document.createElement("div");
+    const title = document.createElement("h3");
+    const hint = document.createElement("span");
+    const count = document.createElement("span");
+    title.textContent = definition.label;
+    hint.textContent = definition.hint;
+    count.className = "sprint-count";
+    count.textContent = tasks.length;
+    heading.append(title, hint);
+    header.append(heading, count);
+    column.append(header);
+
+    const taskList = document.createElement("div");
+    taskList.className = "sprint-task-list";
+    if (!tasks.length) {
+      const empty = document.createElement("p");
+      empty.className = "sprint-empty";
+      empty.textContent = elements.search.value.trim() ? "Sin coincidencias" : "Nada por aquí";
+      taskList.append(empty);
+    }
+
+    for (const task of tasks) {
+      const card = document.createElement("button");
+      card.className = `sprint-card${task.status === "done" ? " done" : ""}`;
+      card.type = "button";
+
+      const cardTitle = document.createElement("strong");
+      cardTitle.textContent = task.title;
+      const context = document.createElement("span");
+      context.textContent = [task.project, task.source].filter(Boolean).map(capitalize).join(" · ") || "Sin proyecto";
+      const time = document.createElement("time");
+      time.dateTime = task.modified;
+      time.textContent = formatRelativeDate(task.modified);
+      card.append(cardTitle, context, time);
+      card.addEventListener("click", () => openTaskFromSprint(task.id));
+      taskList.append(card);
+    }
+
+    column.append(taskList);
+    elements.sprintColumns.append(column);
+  }
+}
+
+function updateWorkspaceMode() {
+  const sprint = isSprintView();
+  elements.sprintBoard.classList.toggle("hidden", !sprint);
+  if (sprint) {
+    elements.empty.classList.add("hidden");
+    elements.editor.classList.add("hidden");
+  } else if (state.selectedId) {
+    elements.empty.classList.add("hidden");
+    elements.editor.classList.remove("hidden");
+  } else {
+    elements.empty.classList.remove("hidden");
+    elements.editor.classList.add("hidden");
+  }
+}
+
+async function setTaskLayout(layout) {
+  if (!["list", "sprint"].includes(layout) || layout === state.taskLayout) return;
+  await flushSave();
+  state.taskLayout = layout;
+  if (layout === "sprint") clearEditor();
+  renderNavigation();
+  renderList();
+  renderSprintBoard();
+  updateWorkspaceMode();
+}
+
+async function openTaskFromSprint(documentId) {
+  state.taskLayout = "list";
+  renderNavigation();
+  updateWorkspaceMode();
+  await selectDocument(documentId, { view: "preview" });
+}
+
 async function selectDocument(documentId, { view = "preview", focus = false } = {}) {
   if (state.loadingDocument || documentId === state.selectedId) return;
   await flushSave();
@@ -357,20 +466,21 @@ async function openDocumentFromSystem(documentId) {
 }
 
 function showDocument(document, { focus = false, view = state.view } = {}) {
+  if (state.taskLayout === "sprint") state.taskLayout = "list";
   state.current = document;
   state.selectedId = document.id;
   state.conflict = null;
   hideConflictNotice();
   elements.title.value = document.title;
   elements.body.value = document.body;
-  elements.empty.classList.add("hidden");
-  elements.editor.classList.remove("hidden");
   if (!restoreConflictDraft(document)) setSaveStatus("Todo guardado");
   setView(view, { focus: false });
   updateEditorStats();
   updateDocumentMetadata();
   updateTaskControls();
+  renderNavigation();
   renderList();
+  updateWorkspaceMode();
   if (focus) elements.title.focus();
 }
 
@@ -520,13 +630,12 @@ function clearEditor() {
   state.current = null;
   state.conflict = null;
   hideConflictNotice();
-  elements.editor.classList.add("hidden");
-  elements.empty.classList.remove("hidden");
   elements.title.value = "";
   elements.body.value = "";
   setSaveStatus("Todo guardado");
   updateEmptyState();
   renderList();
+  updateWorkspaceMode();
 }
 
 async function changeSection(section) {
@@ -536,7 +645,9 @@ async function changeSection(section) {
   if (state.selectedId && !sectionItems().some((item) => item.id === state.selectedId)) clearEditor();
   renderNavigation();
   renderList();
+  renderSprintBoard();
   updateEmptyState();
+  updateWorkspaceMode();
 }
 
 function updateEmptyState() {
@@ -773,11 +884,17 @@ document.querySelector("#refresh").addEventListener("click", async () => {
 elements.taskAction.addEventListener("click", transitionTask);
 elements.writeTab.addEventListener("click", () => setView("write"));
 elements.previewTab.addEventListener("click", () => setView("preview"));
-elements.search.addEventListener("input", renderList);
+elements.search.addEventListener("input", () => {
+  renderList();
+  renderSprintBoard();
+});
 elements.title.addEventListener("input", scheduleSave);
 elements.body.addEventListener("input", scheduleSave);
 document.querySelectorAll(".section-button").forEach((button) => {
   button.addEventListener("click", () => changeSection(button.dataset.section));
+});
+elements.taskViewToggle.querySelectorAll("button").forEach((button) => {
+  button.addEventListener("click", () => setTaskLayout(button.dataset.taskLayout));
 });
 
 document.addEventListener("keydown", (event) => {

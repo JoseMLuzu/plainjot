@@ -46,7 +46,13 @@
           </button>
         </nav>
 
-        <div class="list-heading"><span id="list-heading-label">RECIENTES</span></div>
+        <div class="list-heading">
+          <span id="list-heading-label">RECIENTES</span>
+          <div id="task-view-toggle" class="task-view-toggle hidden" role="group" aria-label="Vista de tareas">
+            <button class="active" type="button" data-task-layout="list" aria-pressed="true">Lista</button>
+            <button type="button" data-task-layout="sprint" aria-pressed="false">Sprint</button>
+          </div>
+        </div>
         <div id="notes-list" class="notes-list" aria-live="polite"></div>
 
         <footer class="sidebar-footer">
@@ -71,6 +77,15 @@
             </button>
           </div>
         </header>
+
+        <section id="sprint-board" class="sprint-board hidden" aria-labelledby="sprint-title">
+          <header class="sprint-header">
+            <p>SPRINT VIEW</p>
+            <h2 id="sprint-title">Trabajo actual</h2>
+            <span>Las mismas tareas Markdown, ordenadas por estado.</span>
+          </header>
+          <div id="sprint-columns" class="sprint-columns"></div>
+        </section>
 
         <div id="empty-state" class="empty-state">
           <div class="empty-illustration" aria-hidden="true">
