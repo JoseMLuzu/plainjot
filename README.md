@@ -18,6 +18,8 @@ A local-first Markdown notebook and task inbox built for humans and coding agent
 
 PlainJot is intentionally small. It is not a workspace, knowledge graph, or project-management system. Ordinary `.md` files in the selected folder—`~/Documents/PlainJot` by default—are always the source of truth.
 
+Notes with Markdown headings get a lightweight outline on the right, so long documents remain easy to navigate without adding metadata to the file.
+
 ## What it does
 
 PlainJot has three quiet sections:

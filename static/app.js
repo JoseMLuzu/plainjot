@@ -34,6 +34,8 @@ const elements = {
   title: document.querySelector("#note-title"),
   body: document.querySelector("#note-body"),
   preview: document.querySelector("#markdown-preview"),
+  outline: document.querySelector("#document-outline"),
+  outlineList: document.querySelector("#document-outline-list"),
   status: document.querySelector("#save-status"),
   date: document.querySelector("#note-date"),
   filename: document.querySelector("#note-filename"),
@@ -632,6 +634,7 @@ function clearEditor() {
   hideConflictNotice();
   elements.title.value = "";
   elements.body.value = "";
+  renderDocumentOutline();
   setSaveStatus("Todo guardado");
   updateEmptyState();
   renderList();
@@ -698,6 +701,7 @@ function updateEditorStats() {
   const words = text ? text.split(/\s+/u).length : 0;
   elements.wordCount.textContent = `${words} ${words === 1 ? "palabra" : "palabras"}`;
   if (state.view === "preview") renderMarkdownPreview();
+  renderDocumentOutline();
 }
 
 function updateDocumentMetadata() {
@@ -762,8 +766,111 @@ function renderInline(value) {
     );
 }
 
+function headingLabel(value) {
+  return value
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_`~]/g, "")
+    .trim();
+}
+
+function headingSlug(value) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "seccion";
+}
+
+function parseMarkdownHeadings(markdown) {
+  const headings = [];
+  const occurrences = new Map();
+  let inCode = false;
+
+  markdown.replaceAll("\r\n", "\n").split("\n").forEach((line, lineIndex) => {
+    if (line.trim().startsWith("```")) {
+      inCode = !inCode;
+      return;
+    }
+    if (inCode) return;
+    const match = line.match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (!match) return;
+    const headingMarkdown = match[2].replace(/\s+#+\s*$/, "").trim();
+    const label = headingLabel(headingMarkdown);
+    if (!label) return;
+    const slug = headingSlug(label);
+    const occurrence = (occurrences.get(slug) || 0) + 1;
+    occurrences.set(slug, occurrence);
+    headings.push({
+      id: `plainjot-heading-${slug}${occurrence > 1 ? `-${occurrence}` : ""}`,
+      label,
+      level: match[1].length,
+      lineIndex,
+      markdown: headingMarkdown,
+    });
+  });
+  return headings;
+}
+
+function setActiveOutlineHeading(headingId) {
+  elements.outlineList.querySelectorAll("button").forEach((button) => {
+    const active = button.dataset.headingId === headingId;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "location");
+    else button.removeAttribute("aria-current");
+  });
+}
+
+function updateOutlineActive() {
+  if (state.view !== "preview") return;
+  const headings = [...elements.preview.querySelectorAll("[data-outline-heading]")];
+  if (!headings.length) return;
+  const previewTop = elements.preview.getBoundingClientRect().top + 12;
+  let active = headings[0];
+  for (const heading of headings) {
+    if (heading.getBoundingClientRect().top > previewTop) break;
+    active = heading;
+  }
+  setActiveOutlineHeading(active.id);
+}
+
+function jumpToHeading(headingId) {
+  if (state.view !== "preview") setView("preview", { focus: false });
+  requestAnimationFrame(() => {
+    const heading = document.getElementById(headingId);
+    if (!heading) return;
+    const top = elements.preview.scrollTop
+      + heading.getBoundingClientRect().top
+      - elements.preview.getBoundingClientRect().top;
+    elements.preview.scrollTo({ top: Math.max(0, top - 4), behavior: "smooth" });
+    setActiveOutlineHeading(headingId);
+  });
+}
+
+function renderDocumentOutline() {
+  const headings = state.selectedId ? parseMarkdownHeadings(elements.body.value) : [];
+  elements.outlineList.replaceChildren();
+  const visible = headings.length > 0;
+  elements.outline.classList.toggle("hidden", !visible);
+  elements.editor.classList.toggle("has-outline", visible);
+  if (!visible) return;
+
+  for (const heading of headings) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.headingId = heading.id;
+    button.className = `outline-level-${Math.min(heading.level, 3)}`;
+    button.textContent = heading.label;
+    button.title = heading.label;
+    button.addEventListener("click", () => jumpToHeading(heading.id));
+    elements.outlineList.append(button);
+  }
+  updateOutlineActive();
+}
+
 function markdownToHtml(markdown) {
   const lines = markdown.replaceAll("\r\n", "\n").split("\n");
+  const headings = new Map(parseMarkdownHeadings(markdown).map((heading) => [heading.lineIndex, heading]));
   const output = [];
   let code = [];
   let inCode = false;
@@ -773,7 +880,7 @@ function markdownToHtml(markdown) {
     listType = null;
   };
 
-  for (const line of lines) {
+  for (const [lineIndex, line] of lines.entries()) {
     if (line.trim().startsWith("```")) {
       closeList();
       if (inCode) {
@@ -800,11 +907,10 @@ function markdownToHtml(markdown) {
       continue;
     }
     closeList();
+    const heading = headings.get(lineIndex);
     if (!line.trim()) continue;
-    if (/^\s*---+\s*$/.test(line)) output.push("<hr>");
-    else if (line.startsWith("### ")) output.push(`<h3>${renderInline(line.slice(4))}</h3>`);
-    else if (line.startsWith("## ")) output.push(`<h2>${renderInline(line.slice(3))}</h2>`);
-    else if (line.startsWith("# ")) output.push(`<h1>${renderInline(line.slice(2))}</h1>`);
+    if (heading) output.push(`<h${heading.level} id="${heading.id}" data-outline-heading>${renderInline(heading.markdown)}</h${heading.level}>`);
+    else if (/^\s*---+\s*$/.test(line)) output.push("<hr>");
     else if (line.startsWith("> ")) output.push(`<blockquote>${renderInline(line.slice(2))}</blockquote>`);
     else output.push(`<p>${renderInline(line)}</p>`);
   }
@@ -818,6 +924,7 @@ function renderMarkdownPreview() {
   elements.preview.innerHTML = body
     ? markdownToHtml(body)
     : '<p class="preview-placeholder">La vista previa aparecerá cuando escribas algo.</p>';
+  updateOutlineActive();
 }
 
 function setSaveStatus(message) {
@@ -884,6 +991,7 @@ document.querySelector("#refresh").addEventListener("click", async () => {
 elements.taskAction.addEventListener("click", transitionTask);
 elements.writeTab.addEventListener("click", () => setView("write"));
 elements.previewTab.addEventListener("click", () => setView("preview"));
+elements.preview.addEventListener("scroll", updateOutlineActive, { passive: true });
 elements.search.addEventListener("input", () => {
   renderList();
   renderSprintBoard();

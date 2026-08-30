@@ -16,6 +16,7 @@ All notable changes are documented here. PlainJot follows semantic versioning on
 - Native folder picker with a shared app and CLI location
 - Recoverable draft conflict resolution for external edits
 - Optional Sprint View for tasks, grouped as Inbox, To do, and Done
+- Clickable document outline generated from Markdown headings
 
 ### Changed
 

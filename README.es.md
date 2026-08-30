@@ -16,6 +16,8 @@ Una libreta Markdown y bandeja de tareas local-first para humanos y coding agent
 
 PlainJot es deliberadamente pequeño. No es un workspace, grafo de conocimiento o gestor de proyectos. Los archivos `.md` de la carpeta elegida —`~/Documents/PlainJot` por defecto— siempre son la fuente de verdad.
 
+Las notas con encabezados Markdown muestran un índice ligero a la derecha para navegar documentos largos sin añadir metadatos al archivo.
+
 ## Qué hace
 
 PlainJot tiene tres secciones sencillas:
