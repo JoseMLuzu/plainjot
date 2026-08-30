@@ -22,6 +22,7 @@ All notable changes are documented here. PlainJot follows semantic versioning on
 
 - Existing notes and tasks open in preview, while newly created documents open in write mode
 - Native deletions move Markdown files to the macOS Trash
+- The document outline is now a collapsible panel that preserves the note width
 
 ### Security
 

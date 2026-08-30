@@ -13,6 +13,7 @@ const state = {
   folder: null,
   view: "write",
   taskLayout: "list",
+  outlineOpen: false,
 };
 
 const elements = {
@@ -36,6 +37,8 @@ const elements = {
   preview: document.querySelector("#markdown-preview"),
   outline: document.querySelector("#document-outline"),
   outlineList: document.querySelector("#document-outline-list"),
+  outlineToggle: document.querySelector("#outline-toggle"),
+  outlineClose: document.querySelector("#outline-close"),
   status: document.querySelector("#save-status"),
   date: document.querySelector("#note-date"),
   filename: document.querySelector("#note-filename"),
@@ -836,6 +839,7 @@ function updateOutlineActive() {
 
 function jumpToHeading(headingId) {
   if (state.view !== "preview") setView("preview", { focus: false });
+  setOutlineOpen(false);
   requestAnimationFrame(() => {
     const heading = document.getElementById(headingId);
     if (!heading) return;
@@ -847,13 +851,24 @@ function jumpToHeading(headingId) {
   });
 }
 
+function setOutlineOpen(open) {
+  state.outlineOpen = Boolean(open);
+  elements.outline.classList.toggle("open", state.outlineOpen);
+  elements.outlineToggle.classList.toggle("active", state.outlineOpen);
+  elements.outlineToggle.setAttribute("aria-expanded", String(state.outlineOpen));
+}
+
 function renderDocumentOutline() {
   const headings = state.selectedId ? parseMarkdownHeadings(elements.body.value) : [];
   elements.outlineList.replaceChildren();
   const visible = headings.length > 0;
   elements.outline.classList.toggle("hidden", !visible);
-  elements.editor.classList.toggle("has-outline", visible);
-  if (!visible) return;
+  elements.outlineToggle.classList.toggle("hidden", !visible);
+  if (!visible) {
+    setOutlineOpen(false);
+    return;
+  }
+  setOutlineOpen(state.outlineOpen);
 
   for (const heading of headings) {
     const button = document.createElement("button");
@@ -992,6 +1007,8 @@ elements.taskAction.addEventListener("click", transitionTask);
 elements.writeTab.addEventListener("click", () => setView("write"));
 elements.previewTab.addEventListener("click", () => setView("preview"));
 elements.preview.addEventListener("scroll", updateOutlineActive, { passive: true });
+elements.outlineToggle.addEventListener("click", () => setOutlineOpen(!state.outlineOpen));
+elements.outlineClose.addEventListener("click", () => setOutlineOpen(false));
 elements.search.addEventListener("input", () => {
   renderList();
   renderSprintBoard();
@@ -1007,7 +1024,10 @@ elements.taskViewToggle.querySelectorAll("button").forEach((button) => {
 
 document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;
-  if (modifier && event.shiftKey && event.key.toLowerCase() === "n") {
+  if (event.key === "Escape" && state.outlineOpen) {
+    event.preventDefault();
+    setOutlineOpen(false);
+  } else if (modifier && event.shiftKey && event.key.toLowerCase() === "n") {
     event.preventDefault();
     createTask();
   } else if (modifier && event.key.toLowerCase() === "n") {
