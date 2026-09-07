@@ -115,6 +115,7 @@ function activateConflict(externalDocument, draft = null) {
   if (draft) {
     elements.title.value = draft.title;
     elements.body.value = draft.body;
+    requestAnimationFrame(resizeTitle);
   }
   persistConflictDraft();
   elements.conflictBanner.classList.remove("hidden");
@@ -483,6 +484,7 @@ function showDocument(document, { focus = false, view = state.view } = {}) {
   renderNavigation();
   renderList();
   updateWorkspaceMode();
+  requestAnimationFrame(resizeTitle);
   if (focus) elements.title.focus();
 }
 
@@ -633,6 +635,8 @@ function clearEditor() {
   state.conflict = null;
   hideConflictNotice();
   elements.title.value = "";
+  elements.title.style.height = "";
+  elements.title.style.overflowY = "";
   elements.body.value = "";
   renderDocumentOutline();
   setSaveStatus("Todo guardado");
@@ -702,6 +706,28 @@ function updateEditorStats() {
   elements.wordCount.textContent = `${words} ${words === 1 ? "palabra" : "palabras"}`;
   if (state.view === "preview") renderMarkdownPreview();
   renderDocumentOutline();
+}
+
+function resizeTitle() {
+  elements.title.style.height = "auto";
+  const lineHeight = Number.parseFloat(getComputedStyle(elements.title).lineHeight) || 56;
+  const maximumHeight = lineHeight * 3;
+  const desiredHeight = Math.min(elements.title.scrollHeight, maximumHeight);
+  elements.title.style.height = `${Math.ceil(desiredHeight)}px`;
+  elements.title.style.overflowY = elements.title.scrollHeight > maximumHeight ? "auto" : "hidden";
+}
+
+function handleTitleInput() {
+  const original = elements.title.value;
+  const cursor = elements.title.selectionStart;
+  const normalized = original.replace(/\s*[\r\n]+\s*/g, " ");
+  if (normalized !== original) {
+    const normalizedBeforeCursor = original.slice(0, cursor).replace(/\s*[\r\n]+\s*/g, " ");
+    elements.title.value = normalized;
+    elements.title.setSelectionRange(normalizedBeforeCursor.length, normalizedBeforeCursor.length);
+  }
+  resizeTitle();
+  scheduleSave();
 }
 
 function updateDocumentMetadata() {
@@ -996,7 +1022,13 @@ elements.search.addEventListener("input", () => {
   renderList();
   renderSprintBoard();
 });
-elements.title.addEventListener("input", scheduleSave);
+elements.title.addEventListener("input", handleTitleInput);
+elements.title.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  setView("write", { focus: false });
+  elements.body.focus();
+});
 elements.body.addEventListener("input", scheduleSave);
 document.querySelectorAll(".section-button").forEach((button) => {
   button.addEventListener("click", () => changeSection(button.dataset.section));
