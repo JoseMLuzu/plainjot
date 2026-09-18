@@ -18,6 +18,8 @@ PlainJot es deliberadamente pequeño. No es un workspace, grafo de conocimiento 
 
 Las notas con encabezados Markdown muestran un índice ligero a la derecha. Pulsa **Ocultar índice** para ampliar el documento; tu elección se recuerda localmente. Los títulos son más compactos y se desplazan con la vista previa, sin quedarse fijos mientras lees.
 
+El icono junto al estado de guardado oculta o muestra la barra izquierda. Al ocultarla, el documento gana espacio y el índice derecho se hace más ancho y legible. Esta preferencia se recuerda localmente; ⌘N y ⌘K vuelven a mostrar la barra para crear o buscar. Una línea sutil separa el título del contenido en lectura y escritura.
+
 ## Qué hace
 
 PlainJot tiene dos secciones sencillas:

@@ -26,6 +26,7 @@ All notable changes are documented here. PlainJot follows semantic versioning on
 
 ### Changed
 
+- Hideable left navigation with a wider, more readable outline when collapsed, plus subtle title separators in preview and write modes
 - Compact document titles scroll with the reading preview; the right outline can be hidden to expand the document, with its visibility remembered locally
 - Two-section navigation: Documents collects notes, developer templates, and whiteboards; Tasks contains Inbox/Pending/Done filters, with one direct Create menu
 - Grouped sidebar navigation and filters, with consistently styled keyboard-accessible native dropdowns

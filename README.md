@@ -20,6 +20,8 @@ PlainJot is intentionally small. It is not a workspace, knowledge graph, or proj
 
 Notes with Markdown headings get a lightweight outline on the right. Use **Ocultar índice** in the current Spanish interface to hide it and expand the document. Your choice is remembered locally. Compact titles scroll with the preview instead of staying pinned while you read.
 
+The sidebar icon beside the save status hides or restores left navigation. Hiding it gives the document more space and makes the right outline wider and more readable. This preference is remembered locally; ⌘N and ⌘K reveal navigation when creating or searching. A subtle line separates the title from the content in preview and write modes.
+
 ## What it does
 
 PlainJot has two quiet sections:
