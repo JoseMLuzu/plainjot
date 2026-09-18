@@ -22,6 +22,7 @@ from plainjot_core import (
     render_markdown,
     slugify,
 )
+from plainjot_core.templates import list_templates
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -61,6 +62,9 @@ def make_handler(store: PlainJotStore):
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
+            if route == "/api/templates":
+                self._send_json(list_templates())
+                return
             if route == "/api/notes":
                 self._send_json(store.list_notes())
                 return
@@ -98,7 +102,12 @@ def make_handler(store: PlainJotStore):
                 return
             title, body = fields
             if route == "/api/notes":
-                self._with_store(lambda: store.create_note(title, body), HTTPStatus.CREATED)
+                kind = payload.get("kind", "")
+                project, source = payload.get("project", ""), payload.get("source", "")
+                if not all(isinstance(value, str) for value in (kind, project, source)):
+                    self._send_error(HTTPStatus.BAD_REQUEST, "Note metadata must be text")
+                    return
+                self._with_store(lambda: store.create_note(title, body, kind=kind, project=project, source=source), HTTPStatus.CREATED)
                 return
             if route == "/api/tasks":
                 status = payload.get("status", "inbox")
@@ -135,6 +144,9 @@ def make_handler(store: PlainJotStore):
             if fields is None:
                 return
             expected = payload.get("expected_revision")
+            if "project" in payload and not isinstance(payload["project"], str):
+                self._send_error(HTTPStatus.BAD_REQUEST, "Project must be text")
+                return
             if expected is not None and not isinstance(expected, str):
                 self._send_error(HTTPStatus.BAD_REQUEST, "Revision must be text")
                 return
@@ -144,6 +156,7 @@ def make_handler(store: PlainJotStore):
                     fields[0],
                     fields[1],
                     expected_revision=expected,
+                    project=payload.get("project"),
                 )
             )
 
@@ -220,7 +233,7 @@ def make_handler(store: PlainJotStore):
 
         def _serve_static(self, route: str) -> None:
             filename = "index.html" if route in ("", "/") else route.lstrip("/")
-            if filename not in {"index.html", "app.js", "style.css"}:
+            if filename not in {"index.html", "app.js", "whiteboard.js", "style.css"}:
                 self._send_error(HTTPStatus.NOT_FOUND, "Route not found")
                 return
             path = STATIC_DIR / filename

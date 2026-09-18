@@ -19,10 +19,15 @@
               <p>Local y privado</p>
             </div>
           </div>
-          <button id="new-item" class="new-note-button" type="button" title="Crear (⌘N)">
-            <span aria-hidden="true">＋</span>
-            <span>Nueva</span>
-          </button>
+          <div class="create-control">
+            <button id="new-item" class="new-note-button" type="button" title="Crear (⌘N)" aria-expanded="false" aria-controls="create-menu">
+              <span aria-hidden="true">＋</span><span>Crear</span>
+            </button>
+            <div id="create-menu" class="create-menu hidden" role="group" aria-label="Crear documento o tarea">
+              <p id="create-context" class="create-context">Sin proyecto</p>
+              <div id="create-options"></div>
+            </div>
+          </div>
         </header>
 
         <label class="search-box">
@@ -34,18 +39,31 @@
           <kbd>⌘ K</kbd>
         </label>
 
+        <div class="sidebar-controls">
+          <label class="project-filter">
+            <span>Proyecto</span>
+            <span class="select-shell">
+              <select id="project-filter" aria-label="Filtrar por proyecto"><option value="">Todos los proyectos</option></select>
+              <svg class="select-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+            </span>
+          </label>
+
+        </div>
+
         <nav class="section-nav" aria-label="Secciones principales">
           <button class="section-button active" type="button" data-section="notes" aria-current="page">
-            <span>Notes</span><span id="notes-count" class="note-count">0</span>
-          </button>
-          <button class="section-button" type="button" data-section="inbox">
-            <span>Inbox</span><span id="inbox-count" class="note-count">0</span>
+            <span>Documentos</span><span id="notes-count" class="note-count">0</span>
           </button>
           <button class="section-button" type="button" data-section="tasks">
-            <span>Tasks</span><span id="tasks-count" class="note-count">0</span>
+            <span>Tareas</span><span id="tasks-count" class="note-count">0</span>
           </button>
         </nav>
 
+        <div id="task-filters" class="task-filters hidden" role="group" aria-label="Estado de las tareas">
+          <button type="button" data-task-filter="inbox" aria-pressed="false">Inbox <span id="inbox-count">0</span></button>
+          <button type="button" data-task-filter="todo" aria-pressed="true">Pendientes <span id="todo-count">0</span></button>
+          <button type="button" data-task-filter="done" aria-pressed="false">Hechas <span id="done-count">0</span></button>
+        </div>
         <div class="list-heading">
           <span id="list-heading-label">RECIENTES</span>
           <div id="task-view-toggle" class="task-view-toggle hidden" role="group" aria-label="Vista de tareas">
@@ -92,10 +110,10 @@
             <span class="paper paper-back"></span>
             <span class="paper paper-front"><i></i><i></i><i></i></span>
           </div>
-          <p id="empty-kicker" class="empty-kicker">TU ESPACIO PERSONAL</p>
-          <h2 id="empty-title">Las ideas empiezan aquí.</h2>
-          <p id="empty-copy" class="empty-copy">Crea una nota o pídele a un agente que guarde un archivo Markdown. Todo permanece en tu computadora.</p>
-          <button id="empty-new-item" class="primary-button" type="button">Crear una nota</button>
+          <p id="empty-kicker" class="empty-kicker">DOCUMENTOS</p>
+          <h2 id="empty-title">Tu trabajo, en un solo lugar.</h2>
+          <p id="empty-copy" class="empty-copy">Notas, journals, roadmaps y pizarras. Abre un documento o pulsa + Crear para empezar.</p>
+          <button id="empty-new-item" class="primary-button" type="button">＋ Crear</button>
           <span class="shortcut-hint">Presiona <kbd>⌘ N</kbd> en cualquier momento</span>
         </div>
 
@@ -106,6 +124,7 @@
               <button id="preview-tab" class="view-tab" type="button" role="tab" aria-selected="false">Vista previa</button>
             </div>
             <div class="document-actions">
+              <button id="outline-toggle" class="outline-toggle hidden" type="button" aria-controls="document-outline" aria-expanded="false">Mostrar índice</button>
               <button id="task-action" class="task-action hidden" type="button"></button>
               <button id="delete-note" class="delete-button" type="button" title="Eliminar documento">
                 <span aria-hidden="true">⌫</span>
@@ -129,8 +148,46 @@
               <span id="note-filename">nota.md</span>
             </div>
             <div id="task-context" class="task-context hidden"></div>
+            <label class="document-project hidden">
+              <span>Proyecto</span>
+              <input id="document-project" type="text" maxlength="200" placeholder="Sin proyecto" aria-label="Proyecto del documento" />
+            </label>
             <textarea id="note-body" class="body-input" placeholder="Empieza a escribir…" spellcheck="true" aria-label="Contenido de la nota"></textarea>
             <article id="markdown-preview" class="markdown-preview hidden" aria-label="Vista previa de la nota"></article>
+            <section id="whiteboard-panel" class="whiteboard-panel hidden" aria-label="Pizarra">
+              <div class="drawing-toolbar" role="group" aria-label="Herramientas de dibujo">
+                <div class="drawing-tools" role="group" aria-label="Herramienta">
+                  <button type="button" data-draw-tool="pen" aria-pressed="true">Lápiz</button>
+                  <button type="button" data-draw-tool="eraser" aria-pressed="false" title="Elimina trazos completos">Borrador</button>
+                  <button type="button" data-draw-tool="rect" aria-pressed="false">Rectángulo</button>
+                  <button type="button" data-draw-tool="arrow" aria-pressed="false">Flecha</button>
+                  <button type="button" data-draw-tool="text" aria-pressed="false">Texto</button>
+                </div>
+                <label class="drawing-select">Color
+                  <select id="drawing-color" aria-label="Color del dibujo">
+                    <option value="#294438">Verde</option><option value="#30343b">Grafito</option>
+                    <option value="#3269a8">Azul</option><option value="#bc5149">Rojo</option>
+                  </select>
+                </label>
+                <label class="drawing-select">Trazo
+                  <select id="drawing-size" aria-label="Grosor del trazo">
+                    <option value="2">Fino</option><option value="4" selected>Medio</option><option value="8">Grueso</option>
+                  </select>
+                </label>
+                <button id="drawing-undo" type="button" title="Deshacer (⌘Z en la pizarra)">↶ Deshacer</button>
+                <button id="drawing-redo" type="button" title="Rehacer (⌘⇧Z en la pizarra)">↷ Rehacer</button>
+                <button id="drawing-export" type="button">Exportar SVG</button>
+                <input id="drawing-text" class="drawing-text hidden" type="text" maxlength="1000" placeholder="Escribe aquí y haz clic en la pizarra" aria-label="Texto para colocar en la pizarra" />
+              </div>
+              <p id="whiteboard-error" class="whiteboard-error hidden" role="alert"></p>
+              <div class="whiteboard-scroll">
+                <svg id="drawing-surface" class="drawing-surface" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" tabindex="0" role="group" aria-label="Lienzo de dibujo. Usa el ratón o un lápiz táctil. Deshacer con comando Z." aria-describedby="drawing-hint"></svg>
+              </div>
+              <div class="whiteboard-caption">
+                <span id="drawing-hint">Arrastra para dibujar. El borrador elimina trazos completos.</span>
+                <input id="whiteboard-reference" type="text" readonly aria-label="Enlace Markdown a esta pizarra" title="Copia este enlace para usarlo en una nota o journal" />
+              </div>
+            </section>
           </div>
 
           <aside id="document-outline" class="document-outline hidden" aria-label="Índice de la nota">
@@ -147,6 +204,7 @@
     </main>
 
     <div id="toast" class="toast" role="status"></div>
+    <script src="whiteboard.js" defer></script>
     <script src="app.js" defer></script>
   </body>
 </html>

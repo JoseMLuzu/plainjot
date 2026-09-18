@@ -9,6 +9,7 @@ struct StoreFailure: LocalizedError {
 
 private let taskStatuses: Set<String> = ["inbox", "todo", "done"]
 private let taskFields = ["type", "status", "project", "source", "created", "completed"]
+private let noteKinds: Set<String> = ["", "debug-journal", "roadmap", "decision", "refactor", "review", "handoff", "whiteboard"]
 private let maximumFileBytes = 2 * 1024 * 1024
 
 struct PlainJotConfiguration {
@@ -79,6 +80,12 @@ final class PlainJotStore {
     }
 
     func route(method: String, path: String, body: Any?) throws -> (status: Int, body: Any?) {
+        if method == "GET" && path == "/api/templates" {
+            guard let url = Bundle.main.url(forResource: "templates", withExtension: "json") else {
+                throw StoreFailure(status: 500, message: "No se encontraron las plantillas")
+            }
+            return (200, try JSONSerialization.jsonObject(with: Data(contentsOf: url)))
+        }
         if method == "GET" && path == "/api/notes" {
             return (200, try listNotes())
         }
@@ -87,7 +94,12 @@ final class PlainJotStore {
         }
         if method == "POST" && path == "/api/notes" {
             let fields = try documentFields(from: body)
-            return (201, try createNote(title: fields.title, body: fields.body))
+            let payload = body as? [String: Any] ?? [:]
+            guard let kind = (payload["kind"] ?? "") as? String else {
+                throw StoreFailure(status: 400, message: "El tipo de nota debe ser texto")
+            }
+            return (201, try createNote(title: fields.title, body: fields.body, kind: kind,
+                project: try textField(payload, "project"), source: try textField(payload, "source")))
         }
         if method == "POST" && path == "/api/tasks" {
             let fields = try documentFields(from: body)
@@ -97,9 +109,9 @@ final class PlainJotStore {
                 try createTask(
                     title: fields.title,
                     body: fields.body,
-                    status: payload["status"] as? String ?? "inbox",
-                    project: payload["project"] as? String ?? "",
-                    source: payload["source"] as? String ?? ""
+                    status: try textField(payload, "status", fallback: "inbox"),
+                    project: try textField(payload, "project"),
+                    source: try textField(payload, "source")
                 )
             )
         }
@@ -112,18 +124,21 @@ final class PlainJotStore {
                 return (200, try getDocument(documentID))
             case "PUT":
                 let fields = try documentFields(from: body)
-                let expected = (body as? [String: Any])?["expected_revision"] as? String
+                let payload = body as? [String: Any] ?? [:]
+                let expected = try optionalTextField(payload, "expected_revision")
+                let project = payload["project"] == nil ? nil : try textField(payload, "project")
                 return (
                     200,
                     try updateDocument(
                         documentID,
                         title: fields.title,
                         body: fields.body,
-                        expectedRevision: expected
+                        expectedRevision: expected,
+                        project: project
                     )
                 )
             case "DELETE":
-                let expected = (body as? [String: Any])?["expected_revision"] as? String
+                let expected = try optionalTextField(body as? [String: Any] ?? [:], "expected_revision")
                 try deleteDocument(documentID, expectedRevision: expected)
                 return (204, nil)
             default:
@@ -138,7 +153,7 @@ final class PlainJotStore {
             else {
                 throw StoreFailure(status: 400, message: "El estado debe ser texto")
             }
-            let expected = payload["expected_revision"] as? String
+            let expected = try optionalTextField(payload, "expected_revision")
             return (200, try updateTaskStatus(taskID, status: status, expectedRevision: expected))
         }
 
@@ -194,11 +209,20 @@ final class PlainJotStore {
         return try secureExistingURL(candidate).lastPathComponent
     }
 
-    func createNote(title: String, body: String) throws -> [String: Any] {
+    func createNote(title: String, body: String, kind: String = "", project: String = "", source: String = "") throws -> [String: Any] {
+        guard noteKinds.contains(kind) else {
+            throw StoreFailure(status: 400, message: "Tipo de nota no compatible")
+        }
         let cleanTitle = try cleanTitle(title)
         let documentID = "\(slugify(cleanTitle))-\(UUID().uuidString.lowercased().prefix(7)).md"
         let fileURL = try fileURL(for: documentID)
-        try atomicWrite(renderMarkdown(title: cleanTitle, body: body), to: fileURL)
+        let markdown = try renderMarkdown(title: cleanTitle, body: body)
+        let project = try metadataValue(project, field: "project")
+        let source = try metadataValue(source, field: "source")
+        let values = [("type", "note"), ("kind", kind), ("project", project), ("source", source), ("created", timestamp())]
+        let raw = values.map { "\($0.0): \(formatYAMLValue($0.1))" }.joined(separator: "\n")
+        let content = kind.isEmpty && project.isEmpty && source.isEmpty ? markdown : "---\n\(raw)\n---\n\n\(markdown)"
+        try atomicWrite(content, to: fileURL)
         return try getDocument(documentID)
     }
 
@@ -232,13 +256,28 @@ final class PlainJotStore {
         _ documentID: String,
         title: String,
         body: String,
-        expectedRevision: String? = nil
+        expectedRevision: String? = nil,
+        project: String? = nil
     ) throws -> [String: Any] {
         let fileURL = try fileURL(for: documentID)
         let existing = try readDocument(fileURL)
         try checkRevision(existing, expected: expectedRevision)
         let markdown = try renderMarkdown(title: title, body: body)
-        let content = existing.frontmatterRaw.map { "---\n\($0)\n---\n\n\(markdown)" } ?? markdown
+        var raw = existing.frontmatterRaw
+        if let project = project {
+            let value = try metadataValue(project, field: "project")
+            if value != (existing.metadata["project"] ?? "") {
+                var lines = (raw?.components(separatedBy: "\n") ?? []).filter {
+                    $0.components(separatedBy: ":").first?.trimmingCharacters(in: .whitespaces) != "project"
+                }
+                lines.append("project: \(formatYAMLValue(value))")
+                guard lines.count < 100 else {
+                    throw StoreFailure(status: 400, message: "El frontmatter es demasiado grande para añadir un proyecto")
+                }
+                raw = lines.joined(separator: "\n")
+            }
+        }
+        let content = raw.map { "---\n\($0)\n---\n\n\(markdown)" } ?? markdown
         try atomicWrite(content, to: fileURL)
         return try getDocument(documentID)
     }
@@ -306,11 +345,12 @@ final class PlainJotStore {
             "title": document.title,
             "body": document.body,
             "type": document.isTask ? "task" : "note",
+            "kind": document.isTask ? "" : document.metadata["kind"] ?? "",
             "modified": dateFormatter.string(from: document.modified),
             "revision": document.revision,
         ]
         for key in taskFields.dropFirst() {
-            result[key] = document.isTask ? (key == "status" ? document.status : document.metadata[key] ?? "") : ""
+            result[key] = key == "status" ? document.status : document.metadata[key] ?? ""
         }
         return result
     }
@@ -435,6 +475,18 @@ final class PlainJotStore {
             let array = String(data: data, encoding: .utf8)
         else { return "\"\"" }
         return String(array.dropFirst().dropLast())
+    }
+
+    private func textField(_ payload: [String: Any], _ key: String, fallback: String = "") throws -> String {
+        guard let value = (payload[key] ?? fallback) as? String else {
+            throw StoreFailure(status: 400, message: "\(key) debe ser texto")
+        }
+        return value
+    }
+
+    private func optionalTextField(_ payload: [String: Any], _ key: String) throws -> String? {
+        guard let value = payload[key], !(value is NSNull) else { return nil }
+        return try textField(payload, key)
     }
 
     private func documentFields(from value: Any?) throws -> (title: String, body: String) {

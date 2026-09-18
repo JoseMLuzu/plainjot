@@ -2,6 +2,51 @@
 @preconcurrency import WebKit
 import Foundation
 import Darwin
+import UniformTypeIdentifiers
+
+// Only generated, inert SVG geometry can be exported; never scripts or file references.
+private final class WhiteboardSVGValidator: NSObject, XMLParserDelegate {
+    private(set) var valid = true
+    private(set) var rootIsSVG = false
+    private var depth = 0
+    private let tags: Set<String> = ["svg", "title", "rect", "circle", "polyline", "line", "text", "tspan"]
+    private let attributes: Set<String> = ["xmlns", "width", "height", "viewBox", "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "dy", "points", "stroke", "stroke-width", "fill", "stroke-linecap", "stroke-linejoin", "font-family", "font-size", "dominant-baseline"]
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes values: [String: String]) {
+        if depth == 0 { rootIsSVG = elementName == "svg" && values["xmlns"] == "http://www.w3.org/2000/svg" }
+        depth += 1
+        if depth > 4 || !tags.contains(elementName) || !Set(values.keys).isSubset(of: attributes) || (values["xmlns"] != nil && values["xmlns"] != "http://www.w3.org/2000/svg") {
+            valid = false; parser.abortParsing()
+        }
+        for (key, value) in values where key != "xmlns" {
+            let fixed: [String: String] = ["font-family": "system-ui, sans-serif", "stroke-linecap": "round", "stroke-linejoin": "round", "dominant-baseline": "hanging"]
+            let safe: Bool
+            if key == "dy" { safe = value == "0" || value == "1.25em" }
+            else if let expected = fixed[key] { safe = value == expected }
+            else if ["fill", "stroke"].contains(key) { safe = value == "none" || value.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) != nil }
+            else { safe = value.range(of: "^[0-9., eE+%\\-]+$", options: .regularExpression) != nil }
+            if !safe { valid = false; parser.abortParsing() }
+        }
+    }
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) { depth -= 1 }
+}
+
+private func validatedWhiteboardExport(_ body: Any?) throws -> (filename: String, data: Data) {
+    guard let payload = body as? [String: Any], let filename = payload["filename"] as? String,
+          !filename.isEmpty, filename.count <= 240, !filename.contains("/"), !filename.contains("\\"),
+          !filename.contains("\0"), !filename.hasPrefix("."), filename.hasSuffix(".svg"),
+          let svg = payload["svg"] as? String, let data = svg.data(using: .utf8), data.count <= 2 * 1024 * 1024,
+          !svg.contains("<!"), !svg.contains("<?") else {
+        throw StoreFailure(status: 400, message: "Exportación de pizarra inválida")
+    }
+    let validator = WhiteboardSVGValidator()
+    let parser = XMLParser(data: data)
+    parser.shouldResolveExternalEntities = false
+    parser.delegate = validator
+    guard parser.parse(), validator.valid, validator.rootIsSVG else {
+        throw StoreFailure(status: 400, message: "El SVG debe contener solo geometría y texto")
+    }
+    return (filename, data)
+}
 
 final class NotesBridge: NSObject, WKScriptMessageHandler {
     private var store: PlainJotStore
@@ -31,6 +76,11 @@ final class NotesBridge: NSObject, WKScriptMessageHandler {
             return
         }
 
+        if path == "/api/export/whiteboard" {
+            handleWhiteboardExport(id: id, method: method, body: requestBody)
+            return
+        }
+
         do {
             let response = try store.route(method: method, path: path, body: requestBody)
             resolve(id: id, status: response.status, body: response.body)
@@ -43,6 +93,38 @@ final class NotesBridge: NSObject, WKScriptMessageHandler {
 
     func replaceStore(_ store: PlainJotStore) {
         self.store = store
+    }
+
+    private func handleWhiteboardExport(id: String, method: String, body: Any?) {
+        guard method == "POST" else {
+            resolve(id: id, status: 405, body: ["error": "Método no permitido"]); return
+        }
+        do {
+            let export = try validatedWhiteboardExport(body)
+            let panel = NSSavePanel()
+            panel.title = "Exportar pizarra"
+            panel.nameFieldStringValue = export.filename
+            panel.allowedContentTypes = [.svg]
+            panel.begin { [weak self] response in
+                guard let self else { return }
+                guard response == .OK, let url = panel.url else {
+                    self.resolve(id: id, status: 200, body: ["saved": false]); return
+                }
+                guard url.pathExtension.lowercased() == "svg" else {
+                    self.resolve(id: id, status: 400, body: ["error": "El archivo de exportación debe ser SVG"]); return
+                }
+                do {
+                    try export.data.write(to: url, options: .atomic)
+                    self.resolve(id: id, status: 200, body: ["saved": true])
+                } catch {
+                    self.resolve(id: id, status: 500, body: ["error": "No se pudo exportar la pizarra"])
+                }
+            }
+        } catch let failure as StoreFailure {
+            resolve(id: id, status: failure.status, body: ["error": failure.message])
+        } catch {
+            resolve(id: id, status: 500, body: ["error": "No se pudo exportar la pizarra"])
+        }
     }
 
     private func handleFolderRequest(id: String, method: String) {
@@ -188,7 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func createNewNote(_ sender: Any?) {
-        webView?.evaluateJavaScript("createNote();")
+        webView?.evaluateJavaScript("createForCurrentSection();")
     }
 
     @objc private func createNewTask(_ sender: Any?) {
@@ -208,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "Archivo")
-        let newNote = NSMenuItem(title: "Nueva nota", action: #selector(createNewNote(_:)), keyEquivalent: "n")
+        let newNote = NSMenuItem(title: "Crear…", action: #selector(createNewNote(_:)), keyEquivalent: "n")
         newNote.target = self
         fileMenu.addItem(newNote)
         let newTask = NSMenuItem(title: "Nueva tarea", action: #selector(createNewTask(_:)), keyEquivalent: "n")
@@ -423,6 +505,80 @@ func runSelfTest() throws {
         throw StoreFailure(status: 500, message: "Falló la creación nativa")
     }
     try require(created.status == 201, "Estado incorrecto al crear una nota")
+    let drawingBody = "```plainjot-whiteboard\n{\"version\":1,\"width\":1600,\"height\":1000,\"elements\":[]}\n```"
+    let drawing = try store.createNote(title: "Architecture", body: drawingBody, kind: "whiteboard", project: "plainjot")
+    let drawingID = drawing["id"] as? String ?? ""
+    try require(drawing["kind"] as? String == "whiteboard" && drawing["body"] as? String == drawingBody, "Se perdió la pizarra Markdown")
+    let drawingURL = testDirectory.appendingPathComponent(drawingID)
+    try String(contentsOf: drawingURL, encoding: .utf8).replacingOccurrences(of: "# Architecture", with: "# External architecture").write(to: drawingURL, atomically: true, encoding: .utf8)
+    try requireStoreFailure(status: 409) {
+        _ = try store.updateDocument(drawingID, title: "Stale", body: drawingBody, expectedRevision: drawing["revision"] as? String)
+    }
+    let externalDrawing = try store.getDocument(drawingID)
+    try require(externalDrawing["title"] as? String == "External architecture", "No se detectó la pizarra externa")
+    let safeSVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1600\" height=\"1000\"><title>Board &amp; journal</title><rect width=\"100%\" height=\"100%\" fill=\"#faf9f5\"/><text x=\"10\" y=\"10\" fill=\"#30343b\" font-family=\"system-ui, sans-serif\" font-size=\"26\" dominant-baseline=\"hanging\"><tspan x=\"10\" dy=\"0\">API</tspan></text></svg>"
+    _ = try validatedWhiteboardExport(["filename": "architecture.svg", "svg": safeSVG])
+    _ = try validatedWhiteboardExport(["filename": "multiline.svg", "svg": safeSVG.replacingOccurrences(of: "</tspan>", with: "</tspan><tspan x=\"10\" dy=\"1.25em\">Auth</tspan>")])
+    for unsafe in ["<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>", safeSVG.replacingOccurrences(of: "fill=\"#faf9f5\"", with: "fill=\"url(file:///etc/passwd)\""), safeSVG.replacingOccurrences(of: "<rect", with: "<rect onload=\"evil\""), "<!DOCTYPE svg>" + safeSVG] {
+        try requireStoreFailure(status: 400) { _ = try validatedWhiteboardExport(["filename": "board.svg", "svg": unsafe]) }
+    }
+    try requireStoreFailure(status: 400) { _ = try validatedWhiteboardExport(["filename": "../board.svg", "svg": safeSVG]) }
+    try store.deleteDocument(drawingID)
+    discardedDocumentURL = nil
+    let templatesResult = try store.route(method: "GET", path: "/api/templates", body: nil)
+    guard let templates = templatesResult.body as? [[String: Any]] else {
+        throw StoreFailure(status: 500, message: "No se pudo cargar el catálogo de plantillas")
+    }
+    try require(templates.count == 7, "Faltan plantillas de desarrollo")
+    for template in templates where template["type"] as? String == "note" {
+        let kind = template["id"] as? String ?? ""
+        let developerNote = try store.createNote(title: "Template", body: template["body"] as? String ?? "", kind: kind, project: "alpha", source: "codex")
+        try require(developerNote["project"] as? String == "alpha" && developerNote["source"] as? String == "codex", "Se perdieron metadatos compartidos")
+    }
+    let projectNote = try store.updateDocument(noteID, title: "Prueba nativa", body: "Contenido local", expectedRevision: note["revision"] as? String, project: "My project: one")
+    try require(projectNote["project"] as? String == "My project: one", "Falló la edición de proyecto")
+    try requireStoreFailure(status: 409) {
+        _ = try store.updateDocument(noteID, title: "Old", body: "", expectedRevision: "stale", project: "beta")
+    }
+    try requireStoreFailure(status: 400) {
+        _ = try store.route(method: "PUT", path: "/api/documents/\(noteID)", body: ["title": "Invalid", "body": "", "project": 42])
+    }
+    try requireStoreFailure(status: 400) {
+        _ = try store.createNote(title: "Invalid", body: "", project: "alpha\ntype: task")
+    }
+    let metadataURL = testDirectory.appendingPathComponent("metadata-note.md")
+    try "---\ntype: note\n# Keep comment\ncustom: preserve\nproject: old\n---\n\n# Metadata\n\nBody\n".write(to: metadataURL, atomically: true, encoding: .utf8)
+    let metadataNote = try store.updateDocument("metadata-note.md", title: "Metadata", body: "Body", project: "new \"project\"")
+    let metadataContent = try String(contentsOf: metadataURL, encoding: .utf8)
+    try require(metadataNote["project"] as? String == "new \"project\"", "Falló el quoting de proyecto")
+    try require(metadataContent.contains("# Keep comment\ncustom: preserve"), "Se perdió frontmatter externo")
+    let longMetadataURL = testDirectory.appendingPathComponent("long-metadata.md")
+    let longMetadata = "---\ntype: note\n" + Array(repeating: "# Comment", count: 98).joined(separator: "\n") + "\n---\n\n# Long\n\nBody\n"
+    try longMetadata.write(to: longMetadataURL, atomically: true, encoding: .utf8)
+    try requireStoreFailure(status: 400) {
+        _ = try store.updateDocument("long-metadata.md", title: "Long", body: "Body", project: "alpha")
+    }
+    let preservedLongMetadata = try String(contentsOf: longMetadataURL, encoding: .utf8)
+    try require(preservedLongMetadata == longMetadata, "Se modificó un frontmatter que excedería el límite")
+    let journalResult = try store.route(
+        method: "POST",
+        path: "/api/notes",
+        body: ["title": "Bug: Journal", "body": "## Síntoma\n\nNo abría.", "kind": "debug-journal"]
+    )
+    guard let journal = journalResult.body as? [String: Any], let journalID = journal["id"] as? String else {
+        throw StoreFailure(status: 500, message: "Falló la creación del Debug Journal")
+    }
+    try require(journal["type"] as? String == "note" && journal["kind"] as? String == "debug-journal", "El journal no es una nota Markdown")
+    let editedJournal = try store.updateDocument(journalID, title: "Bug: Resuelto", body: "## Qué aprendí\n\nComprobar el evento.")
+    try require(editedJournal["kind"] as? String == "debug-journal", "Se perdió el tipo de journal al editar")
+    let journalContent = try String(contentsOf: testDirectory.appendingPathComponent(journalID), encoding: .utf8)
+    try require(journalContent.contains("kind: debug-journal") && journalContent.contains("created:"), "No se conservaron los metadatos Markdown")
+    try requireStoreFailure(status: 400) {
+        _ = try store.route(method: "POST", path: "/api/notes", body: ["title": "Invalid", "body": "", "kind": 42])
+    }
+    try requireStoreFailure(status: 400) {
+        _ = try store.createNote(title: "Invalid", body: "", kind: "debug-journal\ntype: task")
+    }
     let noteURL = testDirectory.appendingPathComponent(noteID)
     let openedDocumentID = try store.documentID(forOpenedFileURL: noteURL)
     try require(

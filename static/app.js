@@ -13,9 +13,24 @@ const state = {
   folder: null,
   view: "write",
   taskLayout: "list",
+  taskFilter: "todo",
+  creating: false,
+  project: "",
+  projectOptionsKey: null,
+  templates: [],
+  outlineHidden: false,
 };
 
+function isWhiteboard(item) {
+  return item?.type === "note" && item.kind === "whiteboard";
+}
+
 const elements = {
+  projectFilter: document.querySelector("#project-filter"),
+  createMenu: document.querySelector("#create-menu"),
+  createOptions: document.querySelector("#create-options"),
+  createContext: document.querySelector("#create-context"),
+  documentProject: document.querySelector("#document-project"),
   list: document.querySelector("#notes-list"),
   search: document.querySelector("#search"),
   editor: document.querySelector("#editor"),
@@ -31,11 +46,17 @@ const elements = {
   notesCount: document.querySelector("#notes-count"),
   inboxCount: document.querySelector("#inbox-count"),
   tasksCount: document.querySelector("#tasks-count"),
+  taskFilters: document.querySelector("#task-filters"),
+  todoCount: document.querySelector("#todo-count"),
+  doneCount: document.querySelector("#done-count"),
+  whiteboardPanel: document.querySelector("#whiteboard-panel"),
+  whiteboardReference: document.querySelector("#whiteboard-reference"),
   title: document.querySelector("#note-title"),
   body: document.querySelector("#note-body"),
   preview: document.querySelector("#markdown-preview"),
   outline: document.querySelector("#document-outline"),
   outlineList: document.querySelector("#document-outline-list"),
+  outlineToggle: document.querySelector("#outline-toggle"),
   status: document.querySelector("#save-status"),
   date: document.querySelector("#note-date"),
   filename: document.querySelector("#note-filename"),
@@ -54,6 +75,17 @@ const elements = {
   toast: document.querySelector("#toast"),
   themeMeta: document.querySelector('meta[name="theme-color"]'),
 };
+
+const drawing = new PlainJotWhiteboard.Editor({
+  svg: document.querySelector("#drawing-surface"),
+  error: document.querySelector("#whiteboard-error"),
+  text: document.querySelector("#drawing-text"),
+  undo: document.querySelector("#drawing-undo"),
+  redo: document.querySelector("#drawing-redo"),
+  tools: [...document.querySelectorAll("[data-draw-tool]")],
+  onChange: (body) => { elements.body.value = body; scheduleSave(); },
+  onError: (message) => showToast(message),
+});
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -87,7 +119,7 @@ function persistConflictDraft() {
   try {
     localStorage.setItem(
       conflictDraftKey(state.selectedId),
-      JSON.stringify({ title: elements.title.value, body: elements.body.value, saved_at: new Date().toISOString() })
+      JSON.stringify({ title: elements.title.value, body: elements.body.value, project: elements.documentProject.value, saved_at: new Date().toISOString() })
     );
   } catch {
     showToast("No se pudo conservar una copia local del borrador.");
@@ -115,7 +147,8 @@ function activateConflict(externalDocument, draft = null) {
   if (draft) {
     elements.title.value = draft.title;
     elements.body.value = draft.body;
-    requestAnimationFrame(resizeTitle);
+    elements.documentProject.value = draft.project ?? externalDocument.project ?? "";
+    resizeTitle();
   }
   persistConflictDraft();
   elements.conflictBanner.classList.remove("hidden");
@@ -132,7 +165,7 @@ function restoreConflictDraft(document) {
 
 async function enterSaveConflict(documentId) {
   if (state.selectedId !== documentId || !state.current) return;
-  const draft = { title: elements.title.value, body: elements.body.value };
+  const draft = { title: elements.title.value, body: elements.body.value, project: elements.documentProject.value };
   state.conflict = { external: state.current };
   persistConflictDraft();
   try {
@@ -156,6 +189,7 @@ async function keepLocalConflictVersion() {
       body: JSON.stringify({
         title: elements.title.value.trim() || "Sin título",
         body: elements.body.value,
+        project: elements.documentProject.value,
         expected_revision: state.conflict.external.revision,
       }),
     });
@@ -224,6 +258,7 @@ async function chooseNotesFolder() {
     updateFolderInfo(folder);
     if (!folder.changed) return;
     elements.search.value = "";
+    state.project = "";
     state.section = "notes";
     clearEditor();
     await loadCollections({ preserveSelection: false });
@@ -239,6 +274,7 @@ async function chooseNotesFolder() {
 async function loadCollections({ preserveSelection = true } = {}) {
   try {
     [state.notes, state.tasks] = await Promise.all([api("/api/notes"), api("/api/tasks")]);
+    renderProjects();
     const allItems = [...state.notes, ...state.tasks];
     if (preserveSelection && state.selectedId && !allItems.some((item) => item.id === state.selectedId)) {
       clearEditor();
@@ -254,15 +290,114 @@ async function loadCollections({ preserveSelection = true } = {}) {
   }
 }
 
-function sectionItems() {
-  if (state.section === "notes") return state.notes;
-  if (state.section === "inbox") return state.tasks.filter((task) => task.status === "inbox");
-  return state.tasks.filter((task) => task.status !== "inbox");
+function sectionItems(section = state.section) {
+  const items = section === "notes" ? state.notes : state.tasks.filter((task) => task.status === state.taskFilter);
+  return items.filter(matchesProject);
+}
+
+function matchesProject(item) {
+  return !state.project || item.project === state.project;
+}
+
+function renderProjects() {
+  const projects = [...new Set([...state.notes, ...state.tasks].map((item) => item.project).filter(Boolean))].sort();
+  if (state.project && !projects.includes(state.project)) projects.push(state.project);
+  const options = ["", ...projects];
+  const optionsKey = JSON.stringify(options);
+  if (optionsKey !== state.projectOptionsKey) {
+    elements.projectFilter.replaceChildren();
+    for (const project of options) {
+      const option = document.createElement("option");
+      option.value = project;
+      option.textContent = project || "Todos los proyectos";
+      elements.projectFilter.append(option);
+    }
+    state.projectOptionsKey = optionsKey;
+  }
+  if (elements.projectFilter.value !== state.project) elements.projectFilter.value = state.project;
+}
+
+async function loadTemplates() {
+  try {
+    state.templates = await api("/api/templates");
+    renderCreateOptions();
+  } catch (error) {
+    renderCreateOptions(); // Basic note/task/board creation still works offline.
+    showToast(error.message);
+  }
+}
+
+function renderCreateOptions() {
+  elements.createOptions.replaceChildren();
+  const groups = [
+    ["Documentos", [{ id: "note", label: "Nota" }, { id: "whiteboard", label: "Pizarra" }]],
+    ["Tareas", [{ id: "task", label: "Tarea" }, ...state.templates.filter((item) => item.type === "task")]],
+    ["Plantillas", state.templates.filter((item) => item.type === "note")],
+  ];
+  for (const [label, items] of groups) {
+    if (!items.length) continue;
+    const group = document.createElement("div");
+    const heading = document.createElement("p");
+    heading.className = "create-group-label"; heading.textContent = label; group.append(heading);
+    for (const item of items) {
+      const button = document.createElement("button");
+      button.type = "button"; button.dataset.creation = item.id; button.textContent = item.label;
+      button.addEventListener("click", () => chooseCreation(item.id));
+      group.append(button);
+    }
+    elements.createOptions.append(group);
+  }
+}
+
+function closeCreateMenu({ focus = false } = {}) {
+  elements.createMenu.classList.add("hidden");
+  elements.newItem.setAttribute("aria-expanded", "false");
+  if (focus) elements.newItem.focus();
+}
+
+function toggleCreateMenu() {
+  if (state.creating) return;
+  if (!elements.createMenu.classList.contains("hidden")) return closeCreateMenu({ focus: true });
+  if (!elements.createOptions.children.length) renderCreateOptions();
+  elements.createContext.textContent = state.project ? `Proyecto: ${state.project}` : "Sin proyecto · archivos locales";
+  elements.createMenu.classList.remove("hidden");
+  elements.newItem.setAttribute("aria-expanded", "true");
+  elements.createOptions.querySelectorAll("button")[0]?.focus();
+}
+
+async function chooseCreation(kind) {
+  if (state.creating) return;
+  closeCreateMenu();
+  state.creating = true; elements.newItem.disabled = true;
+  try {
+    if (kind === "note") await createNote();
+    else if (kind === "task") await createTask("todo");
+    else if (kind === "whiteboard") await createWhiteboard();
+    else await createFromTemplate(kind);
+  } finally { state.creating = false; elements.newItem.disabled = false; }
+}
+
+async function setTaskFilter(status) {
+  if (!["inbox", "todo", "done"].includes(status) || status === state.taskFilter) return;
+  await flushSave(); closeCreateMenu(); state.taskFilter = status;
+  if (state.current?.type === "task" && state.current.status !== status) clearEditor();
+  renderNavigation(); renderList(); updateEmptyState(); updateWorkspaceMode();
+}
+
+async function changeProject(project) {
+  await flushSave();
+  closeCreateMenu();
+  state.project = project;
+  if (state.current && !matchesProject(state.current)) clearEditor();
+  renderNavigation();
+  renderList();
+  renderSprintBoard();
+  updateWorkspaceMode();
 }
 
 function matchesSearch(item) {
   const query = elements.search.value.trim().toLocaleLowerCase();
-  return `${item.title} ${item.preview} ${item.project || ""} ${item.source || ""}`
+  return matchesProject(item) && `${item.title} ${item.preview} ${item.project || ""} ${item.source || ""}`
     .toLocaleLowerCase()
     .includes(query);
 }
@@ -272,43 +407,42 @@ function isSprintView() {
 }
 
 function renderNavigation() {
-  const inbox = state.tasks.filter((task) => task.status === "inbox");
-  const tasks = state.tasks.filter((task) => task.status !== "inbox");
-  elements.notesCount.textContent = state.notes.length;
-  elements.inboxCount.textContent = inbox.length;
-  elements.tasksCount.textContent = tasks.length;
+  elements.notesCount.textContent = sectionItems("notes").length;
+  elements.tasksCount.textContent = state.tasks.filter(matchesProject).length;
+  for (const status of ["inbox", "todo", "done"]) {
+    elements[`${status}Count`].textContent = state.tasks.filter((task) => task.status === status && matchesProject(task)).length;
+  }
+  elements.taskFilters.classList.toggle("hidden", state.section !== "tasks" || isSprintView());
+  elements.taskFilters.querySelectorAll("button").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.taskFilter === state.taskFilter)));
+  renderProjects();
   document.querySelectorAll(".section-button").forEach((button) => {
     const active = button.dataset.section === state.section;
     button.classList.toggle("active", active);
     if (active) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
-  elements.listHeading.textContent = state.section === "notes" ? "RECIENTES" : state.section.toUpperCase();
+  elements.listHeading.textContent = state.section === "notes" ? "RECIENTES" : isSprintView() ? "TODAS LAS TAREAS" : { inbox: "POR REVISAR", todo: "PENDIENTES", done: "COMPLETADAS" }[state.taskFilter];
   elements.taskViewToggle.classList.toggle("hidden", state.section !== "tasks");
   elements.taskViewToggle.querySelectorAll("button").forEach((button) => {
     const active = button.dataset.taskLayout === state.taskLayout;
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-  const createsNote = state.section === "notes";
-  elements.newItem.lastElementChild.textContent = createsNote ? "Nota" : "Tarea";
-  elements.newItem.title = createsNote ? "Nueva nota (⌘N)" : "Nueva tarea (⌘⇧N)";
+  elements.newItem.lastElementChild.textContent = "Crear";
+  elements.newItem.title = "Crear documento o tarea (⌘N)";
 }
 
 function renderList() {
   const query = elements.search.value.trim().toLocaleLowerCase();
-  const items = sectionItems().filter(matchesSearch);
+  const items = (isSprintView() ? state.tasks.filter(matchesProject) : sectionItems()).filter(matchesSearch);
   elements.list.replaceChildren();
   if (!items.length) {
     const message = document.createElement("p");
     message.className = "list-message";
     message.textContent = query
       ? "No encontramos nada con ese texto."
-      : state.section === "notes"
-        ? "Todavía no hay notas."
-        : state.section === "inbox"
-          ? "Inbox está limpio."
-          : "Todavía no hay tareas.";
+      : state.section === "notes" ? "Todavía no hay documentos."
+        : { inbox: "Inbox está limpio.", todo: "No hay tareas pendientes.", done: "Todavía no hay tareas completadas." }[state.taskFilter];
     elements.list.append(message);
     return;
   }
@@ -343,8 +477,12 @@ function renderList() {
     } else {
       const preview = document.createElement("span");
       preview.className = "note-preview";
-      preview.textContent = item.preview || "Nota vacía";
+      preview.textContent = isWhiteboard(item) ? (item.project || "Dibujo local · Markdown") : item.preview || "Nota vacía";
       button.append(preview);
+      const kind = document.createElement("span");
+      kind.className = "document-type";
+      kind.textContent = isWhiteboard(item) ? "Pizarra" : state.templates.find((template) => template.id === item.kind)?.label || item.kind || "Nota";
+      button.append(kind);
     }
     button.addEventListener("click", () => selectDocument(item.id));
     elements.list.append(button);
@@ -460,7 +598,9 @@ async function openDocumentFromSystem(documentId) {
   await flushSave();
   try {
     const document = await api(`/api/documents/${encodeURIComponent(documentId)}`);
-    state.section = document.type === "task" ? (document.status === "inbox" ? "inbox" : "tasks") : "notes";
+    if (!matchesProject(document)) state.project = "";
+    state.section = document.type === "task" ? "tasks" : "notes";
+    if (document.type === "task") state.taskFilter = document.status;
     showDocument(document, { view: "preview" });
     await loadCollections();
   } catch (error) {
@@ -469,13 +609,17 @@ async function openDocumentFromSystem(documentId) {
 }
 
 function showDocument(document, { focus = false, view = state.view } = {}) {
+  drawing.cancel();
   if (state.taskLayout === "sprint") state.taskLayout = "list";
   state.current = document;
+  state.section = document.type === "task" ? "tasks" : "notes";
+  if (document.type === "task") state.taskFilter = document.status;
   state.selectedId = document.id;
   state.conflict = null;
   hideConflictNotice();
   elements.title.value = document.title;
   elements.body.value = document.body;
+  elements.documentProject.value = document.project || "";
   if (!restoreConflictDraft(document)) setSaveStatus("Todo guardado");
   setView(view, { focus: false });
   updateEditorStats();
@@ -484,16 +628,24 @@ function showDocument(document, { focus = false, view = state.view } = {}) {
   renderNavigation();
   renderList();
   updateWorkspaceMode();
-  requestAnimationFrame(resizeTitle);
+  resizeTitle();
   if (focus) elements.title.focus();
 }
 
-async function createNote() {
+async function createNote(kind = "") {
   await flushSave();
   try {
+    if (kind && !state.templates.length) await loadTemplates();
+    const template = state.templates.find((item) => item.id === kind && item.type === "note");
+    if (kind && !template) throw new Error("Plantilla no disponible");
     const note = await api("/api/notes", {
       method: "POST",
-      body: JSON.stringify({ title: "Nueva nota", body: "" }),
+      body: JSON.stringify({
+        title: template?.title || "Nueva nota",
+        body: template?.body || "",
+        kind,
+        project: state.project,
+      }),
     });
     state.section = "notes";
     await loadCollections();
@@ -504,14 +656,14 @@ async function createNote() {
   }
 }
 
-async function createTask(status = "inbox") {
+async function createTask(status = "todo", template = null) {
   await flushSave();
   try {
     const task = await api("/api/tasks", {
       method: "POST",
-      body: JSON.stringify({ title: "Nueva tarea", body: "", status, project: "", source: "" }),
+      body: JSON.stringify({ title: template?.title || "Nueva tarea", body: template?.body || "", status, project: state.project, source: "" }),
     });
-    state.section = status === "inbox" ? "inbox" : "tasks";
+    state.section = "tasks"; state.taskFilter = status;
     await loadCollections();
     await selectDocument(task.id, { view: "write", focus: true });
     elements.title.select();
@@ -520,9 +672,47 @@ async function createTask(status = "inbox") {
   }
 }
 
+async function createWhiteboard() {
+  await flushSave();
+  try {
+    const note = await api("/api/notes", {
+      method: "POST",
+      body: JSON.stringify({ title: "Nueva pizarra", body: PlainJotWhiteboard.serialize(PlainJotWhiteboard.empty()), kind: "whiteboard", project: state.project }),
+    });
+    state.section = "notes";
+    await loadCollections();
+    await selectDocument(note.id, { view: "preview", focus: true });
+    elements.title.select();
+  } catch (error) { showToast(error.message); }
+}
+
+async function exportWhiteboard() {
+  if (!isWhiteboard(state.current)) return;
+  drawing.finish();
+  try {
+    const svg = PlainJotWhiteboard.toSVG(PlainJotWhiteboard.parse(elements.body.value), elements.title.value);
+    const filename = state.selectedId.replace(/\.md$/i, ".svg");
+    if (window.webkit?.messageHandlers?.notes) {
+      const result = await api("/api/export/whiteboard", { method: "POST", body: JSON.stringify({ filename, svg }) });
+      if (result.saved) showToast("Pizarra exportada");
+    } else {
+      const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+      const link = document.createElement("a");
+      link.href = url; link.download = filename; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  } catch (error) { showToast(error.message); }
+}
+
 function createForCurrentSection() {
-  if (state.section === "notes") createNote();
-  else createTask(state.section === "tasks" ? "todo" : "inbox");
+  toggleCreateMenu();
+}
+
+async function createFromTemplate(kind) {
+  if (!state.templates.length) await loadTemplates();
+  const template = state.templates.find((item) => item.id === kind);
+  if (!template) return showToast("Selecciona una plantilla");
+  return template.type === "task" ? createTask("todo", template) : createNote(template.id);
 }
 
 function scheduleSave() {
@@ -556,6 +746,7 @@ async function saveCurrent() {
       body: JSON.stringify({
         title: elements.title.value.trim() || "Sin título",
         body: elements.body.value,
+        project: elements.documentProject.value,
         expected_revision: state.current.revision,
       }),
     });
@@ -578,6 +769,7 @@ async function saveCurrent() {
 }
 
 async function flushSave() {
+  drawing.finish();
   if (state.saveTimer) await saveCurrent();
 }
 
@@ -591,7 +783,7 @@ async function transitionTask() {
       method: "PATCH",
       body: JSON.stringify({ status: nextStatus, expected_revision: state.current.revision }),
     });
-    state.section = nextStatus === "inbox" ? "inbox" : "tasks";
+    state.section = "tasks"; state.taskFilter = nextStatus;
     showDocument(updated);
     await loadCollections();
   } catch (error) {
@@ -604,7 +796,7 @@ async function deleteCurrent() {
   if (!state.selectedId || !state.current) return;
   await flushSave();
   if (!state.selectedId || !state.current) return;
-  const kind = state.current.type === "task" ? "la tarea" : "la nota";
+  const kind = isWhiteboard(state.current) ? "la pizarra" : state.current.type === "task" ? "la tarea" : "la nota";
   const title = elements.title.value.trim() || kind;
   const usesTrash = state.folder?.deletion_mode === "trash";
   const message = usesTrash
@@ -628,6 +820,7 @@ async function deleteCurrent() {
 }
 
 function clearEditor() {
+  drawing.cancel();
   clearTimeout(state.saveTimer);
   state.saveTimer = null;
   state.selectedId = null;
@@ -646,8 +839,10 @@ function clearEditor() {
 }
 
 async function changeSection(section) {
+  if (!["notes", "tasks"].includes(section)) return;
   if (section === state.section) return;
   await flushSave();
+  closeCreateMenu();
   state.section = section;
   if (state.selectedId && !sectionItems().some((item) => item.id === state.selectedId)) clearEditor();
   renderNavigation();
@@ -658,11 +853,13 @@ async function changeSection(section) {
 }
 
 function updateEmptyState() {
-  const content = {
-    notes: ["TU ESPACIO PERSONAL", "Las ideas empiezan aquí.", "Tus notas son archivos Markdown locales que también pueden leer tus agentes.", "Crear una nota"],
-    inbox: ["AGENT INBOX", "Las tareas externas llegan aquí.", "Codex, Claude Code u otras herramientas pueden escribir tareas directamente en tu carpeta PlainJot.", "Crear una tarea"],
-    tasks: ["TAREAS", "Una lista pequeña y clara.", "Mueve tareas desde Inbox, complétalas y deja que Markdown siga siendo la fuente de verdad.", "Crear una tarea"],
-  }[state.section];
+  const content = state.section === "notes"
+    ? ["DOCUMENTOS", "Tu trabajo, en un solo lugar.", "Notas, journals, roadmaps y pizarras. Abre un documento o pulsa + Crear para empezar.", "＋ Crear"]
+    : state.taskFilter === "inbox"
+      ? ["INBOX", "Propuestas por revisar.", "Aquí llegan las tareas de tus agentes. Acéptalas para pasarlas a Pendientes.", "＋ Crear"]
+      : state.taskFilter === "done"
+        ? ["HECHAS", "El trabajo que ya terminaste.", "Abre una tarea para consultar sus detalles o reabrirla.", "＋ Crear"]
+        : ["PENDIENTES", "Una lista pequeña y clara.", "Abre una tarea, complétala o crea la siguiente. Revisa Inbox para aceptar propuestas de tus agentes.", "＋ Crear"];
   [elements.emptyKicker.textContent, elements.emptyTitle.textContent, elements.emptyCopy.textContent, elements.emptyButton.textContent] = content;
 }
 
@@ -670,13 +867,13 @@ function updateTaskControls() {
   const isTask = state.current?.type === "task";
   elements.taskAction.classList.toggle("hidden", !isTask);
   elements.taskContext.classList.toggle("hidden", !isTask);
-  elements.documentKind.textContent = isTask ? "Markdown task" : "Markdown note";
+  const template = state.templates.find((item) => item.id === state.current?.kind);
+  elements.documentKind.textContent = isWhiteboard(state.current) ? "Whiteboard · Markdown" : isTask ? "Markdown task" : template ? `${template.label} · Markdown` : "Markdown note";
   if (!isTask) return;
-  const labels = { inbox: "Mover a Tasks", todo: "Completar", done: "Reabrir" };
+  const labels = { inbox: "Aceptar tarea", todo: "Completar", done: "Reabrir" };
   elements.taskAction.textContent = labels[state.current.status] || "Mover a Tasks";
   elements.taskContext.replaceChildren();
   const values = [
-    state.current.project && `Proyecto: ${state.current.project}`,
     state.current.source && `Fuente: ${state.current.source}`,
     `Estado: ${state.current.status}`,
   ].filter(Boolean);
@@ -688,19 +885,41 @@ function updateTaskControls() {
 }
 
 function setView(view, { focus = true } = {}) {
+  drawing.finish();
   state.view = view;
   const isPreview = view === "preview";
+  const board = isWhiteboard(state.current);
+  elements.editor.classList.toggle("whiteboard-document", board);
+  elements.editor.classList.toggle("reading", isPreview);
+  elements.writeTab.textContent = board ? "Markdown" : "Escribir";
+  elements.previewTab.textContent = board ? "Pizarra" : "Vista previa";
+  elements.whiteboardPanel.classList.toggle("hidden", !board || !isPreview);
+  if (board && isPreview) {
+    drawing.load(elements.body.value);
+    elements.whiteboardReference.value = `[Pizarra](${state.selectedId})`;
+  }
   elements.writeTab.classList.toggle("active", !isPreview);
   elements.writeTab.setAttribute("aria-selected", String(!isPreview));
   elements.previewTab.classList.toggle("active", isPreview);
   elements.previewTab.setAttribute("aria-selected", String(isPreview));
   elements.body.classList.toggle("hidden", isPreview);
-  elements.preview.classList.toggle("hidden", !isPreview);
-  if (isPreview) renderMarkdownPreview();
-  else if (focus) elements.body.focus();
+  elements.title.classList.toggle("hidden", isPreview && !board);
+  elements.documentProject.parentElement.classList.toggle("hidden", isPreview);
+  elements.preview.classList.toggle("hidden", !isPreview || board);
+  resizeTitle();
+  if (isPreview) {
+    if (!board) renderMarkdownPreview();
+    else if (focus && drawing.valid) drawing.svg.focus();
+  } else if (focus) elements.body.focus();
 }
 
 function updateEditorStats() {
+  if (isWhiteboard(state.current)) {
+    try { elements.wordCount.textContent = `${PlainJotWhiteboard.parse(elements.body.value).elements.length} elementos`; }
+    catch { elements.wordCount.textContent = "Revisa el bloque Markdown"; }
+    renderDocumentOutline();
+    return;
+  }
   const text = elements.body.value.trim();
   const words = text ? text.split(/\s+/u).length : 0;
   elements.wordCount.textContent = `${words} ${words === 1 ? "palabra" : "palabras"}`;
@@ -782,14 +1001,24 @@ function escapeHtml(value) {
 }
 
 function renderInline(value) {
-  return escapeHtml(value)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
+  const formatText = (text) => escapeHtml(text)
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/_([^_]+)_/g, "<em>$1</em>")
-    .replace(
-      /\[([^\]]+)\]\((https?:\/\/[A-Za-z0-9._~:/?#@!$()*+,;=%-]+)\)/g,
-      '<a href="$2" target="_blank" rel="noreferrer">$1</a>'
-    );
+    .replace(/_([^_]+)_/g, "<em>$1</em>");
+  const tokens = /`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[A-Za-z0-9._~:/?#@!$()*+,;=%-]+|[A-Za-z0-9][A-Za-z0-9._-]*\.md)\)/g;
+  let result = "";
+  let cursor = 0;
+  for (const match of value.matchAll(tokens)) {
+    result += formatText(value.slice(cursor, match.index));
+    if (match[1] !== undefined) result += `<code>${escapeHtml(match[1])}</code>`;
+    else {
+      const target = escapeHtml(match[3]);
+      const attributes = match[3].startsWith("http")
+        ? 'target="_blank" rel="noreferrer"' : `data-document-id="${target}"`;
+      result += `<a href="${target}" ${attributes}>${formatText(match[2])}</a>`;
+    }
+    cursor = match.index + match[0].length;
+  }
+  return result + formatText(value.slice(cursor));
 }
 
 function headingLabel(value) {
@@ -862,23 +1091,28 @@ function updateOutlineActive() {
 
 function jumpToHeading(headingId) {
   if (state.view !== "preview") setView("preview", { focus: false });
-  requestAnimationFrame(() => {
-    const heading = document.getElementById(headingId);
-    if (!heading) return;
-    const top = elements.preview.scrollTop
-      + heading.getBoundingClientRect().top
-      - elements.preview.getBoundingClientRect().top;
-    elements.preview.scrollTo({ top: Math.max(0, top - 4), behavior: "smooth" });
-    setActiveOutlineHeading(headingId);
-  });
+  // Rendering is synchronous; do not depend on animation frames, which WebKit
+  // may suspend when opening a document from a background window.
+  const heading = document.getElementById(headingId);
+  if (!heading) return;
+  const top = elements.preview.scrollTop
+    + heading.getBoundingClientRect().top
+    - elements.preview.getBoundingClientRect().top;
+  elements.preview.scrollTo({ top: Math.max(0, top - 4), behavior: "smooth" });
+  setActiveOutlineHeading(headingId);
 }
 
 function renderDocumentOutline() {
-  const headings = state.selectedId ? parseMarkdownHeadings(elements.body.value) : [];
+  const headings = state.selectedId && !isWhiteboard(state.current) ? parseMarkdownHeadings(elements.body.value) : [];
   elements.outlineList.replaceChildren();
-  const visible = headings.length > 0;
+  const available = headings.length > 0;
+  const visible = available && !state.outlineHidden;
+  elements.outlineToggle.classList.toggle("hidden", !available);
+  elements.outlineToggle.textContent = visible ? "Ocultar índice" : "Mostrar índice";
+  elements.outlineToggle.setAttribute("aria-expanded", String(visible));
   elements.outline.classList.toggle("hidden", !visible);
   elements.editor.classList.toggle("has-outline", visible);
+  elements.editor.classList.toggle("wide-document", available && !visible);
   if (!visible) return;
 
   for (const heading of headings) {
@@ -892,6 +1126,17 @@ function renderDocumentOutline() {
     elements.outlineList.append(button);
   }
   updateOutlineActive();
+}
+
+function toggleDocumentOutline() {
+  state.outlineHidden = !state.outlineHidden;
+  try {
+    localStorage.setItem("plainjot-outline-hidden", String(state.outlineHidden));
+  } catch {
+    // Hiding the outline still works when browser preferences cannot be saved.
+  }
+  renderDocumentOutline();
+  resizeTitle();
 }
 
 function markdownToHtml(markdown) {
@@ -929,7 +1174,11 @@ function markdownToHtml(markdown) {
         listType = nextType;
         output.push(`<${listType}>`);
       }
-      output.push(`<li>${renderInline((unordered || ordered)[1])}</li>`);
+      const text = (unordered || ordered)[1];
+      const checkbox = unordered && text.match(/^\[([ xX])\]\s+(.+)$/);
+      output.push(checkbox
+        ? `<li class="markdown-checklist"><input type="checkbox" disabled aria-label="Criterio"${checkbox[1] !== " " ? " checked" : ""}> ${renderInline(checkbox[2])}</li>`
+        : `<li>${renderInline(text)}</li>`);
       continue;
     }
     closeList();
@@ -947,9 +1196,11 @@ function markdownToHtml(markdown) {
 
 function renderMarkdownPreview() {
   const body = elements.body.value.trim();
-  elements.preview.innerHTML = body
+  const title = escapeHtml(elements.title.value.trim() || "Sin título");
+  const content = body
     ? markdownToHtml(body)
     : '<p class="preview-placeholder">La vista previa aparecerá cuando escribas algo.</p>';
+  elements.preview.innerHTML = `<h1 class="preview-title">${title}</h1>\n${content}`;
   updateOutlineActive();
 }
 
@@ -977,7 +1228,7 @@ function showToast(message) {
 
 async function refreshFromFilesystem() {
   if (state.conflict) return;
-  if (state.saveTimer || state.saving || state.loadingDocument) {
+  if (state.saveTimer || state.saving || state.loadingDocument || drawing.gesture) {
     scheduleFilesystemRefresh();
     return;
   }
@@ -1001,10 +1252,43 @@ function scheduleFilesystemRefresh() {
 
 window.__plainjotFilesChanged = scheduleFilesystemRefresh;
 window.__plainjotOpenDocument = openDocumentFromSystem;
+window.addEventListener("resize", resizeTitle);
+document.querySelector("#drawing-export").addEventListener("click", exportWhiteboard);
+document.querySelector("#drawing-color").addEventListener("change", (event) => {
+  drawing.finish(); drawing.color = event.target.value;
+});
+document.querySelector("#drawing-size").addEventListener("change", (event) => {
+  drawing.finish(); drawing.size = Number(event.target.value);
+});
+elements.whiteboardReference.addEventListener("click", () => elements.whiteboardReference.select());
 
 elements.newItem.addEventListener("click", createForCurrentSection);
 elements.emptyButton.addEventListener("click", createForCurrentSection);
+elements.createMenu.addEventListener("keydown", (event) => {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  const buttons = [...elements.createOptions.querySelectorAll("button")];
+  if (!buttons.length) return;
+  event.preventDefault();
+  const current = buttons.indexOf(event.target);
+  const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+  buttons[next].focus();
+});
+elements.createMenu.addEventListener("focusout", (event) => {
+  if (event.relatedTarget && !elements.createMenu.contains(event.relatedTarget) && !elements.newItem.contains(event.relatedTarget)) closeCreateMenu();
+});
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".create-control") && !event.target.closest("#empty-new-item")) closeCreateMenu();
+});
+elements.taskFilters.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => setTaskFilter(button.dataset.taskFilter)));
 elements.folder.addEventListener("click", chooseNotesFolder);
+elements.projectFilter.addEventListener("change", () => changeProject(elements.projectFilter.value));
+elements.documentProject.addEventListener("input", scheduleSave);
+elements.preview.addEventListener("click", (event) => {
+  const link = event.target.closest("a[data-document-id]");
+  if (!link) return;
+  event.preventDefault();
+  openDocumentFromSystem(link.dataset.documentId);
+});
 elements.keepLocalVersion.addEventListener("click", keepLocalConflictVersion);
 elements.loadExternalVersion.addEventListener("click", loadExternalConflictVersion);
 document.querySelector("#delete-note").addEventListener("click", deleteCurrent);
@@ -1017,6 +1301,7 @@ document.querySelector("#refresh").addEventListener("click", async () => {
 elements.taskAction.addEventListener("click", transitionTask);
 elements.writeTab.addEventListener("click", () => setView("write"));
 elements.previewTab.addEventListener("click", () => setView("preview"));
+elements.outlineToggle.addEventListener("click", toggleDocumentOutline);
 elements.preview.addEventListener("scroll", updateOutlineActive, { passive: true });
 elements.search.addEventListener("input", () => {
   renderList();
@@ -1026,6 +1311,7 @@ elements.title.addEventListener("input", handleTitleInput);
 elements.title.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
+  if (isWhiteboard(state.current)) { elements.title.blur(); return; }
   setView("write", { focus: false });
   elements.body.focus();
 });
@@ -1038,6 +1324,9 @@ elements.taskViewToggle.querySelectorAll("button").forEach((button) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.createMenu.classList.contains("hidden")) {
+    event.preventDefault(); closeCreateMenu({ focus: true }); return;
+  }
   const modifier = event.metaKey || event.ctrlKey;
   if (modifier && event.shiftKey && event.key.toLowerCase() === "n") {
     event.preventDefault();
@@ -1059,11 +1348,17 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("beforeunload", () => {
+  drawing.finish();
   if (state.conflict) persistConflictDraft();
   else if (state.saveTimer) saveCurrent();
 });
 
+try {
+  state.outlineHidden = localStorage.getItem("plainjot-outline-hidden") === "true";
+} catch {
+  // Preferences are optional; Markdown files remain the source of truth.
+}
 const savedTheme = localStorage.getItem("plainjot-theme") || localStorage.getItem("notas-theme");
 const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 applyTheme(savedTheme || preferredTheme);
-loadFolderInfo().then(loadCollections);
+loadTemplates().then(loadFolderInfo).then(loadCollections);

@@ -24,7 +24,9 @@ cp "$project_dir/macos/Info.plist" "$contents_dir/Info.plist"
 cp "$project_dir/static/index.html" "$web_dir/index.html"
 cp "$project_dir/static/style.css" "$web_dir/style.css"
 cp "$project_dir/static/app.js" "$web_dir/app.js"
+cp "$project_dir/static/whiteboard.js" "$web_dir/whiteboard.js"
 cp "$project_dir/macos/native-bridge.js" "$resources_dir/native-bridge.js"
+cp "$project_dir/plainjot_core/templates.json" "$resources_dir/templates.json"
 
 xcrun swift "$project_dir/macos/generate_icon.swift" "$build_dir/icon-1024.png"
 for size in 16 32 128 256 512; do
