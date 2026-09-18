@@ -18,7 +18,11 @@ jobs:
       - name: Test Python core, server, and CLI
         run: python -m unittest -v
       - name: Validate shared JavaScript
-        run: node --check static/app.js
+        run: |
+          node --check static/app.js
+          node --check static/whiteboard.js
+      - name: Test shared frontend state
+        run: node --test test_frontend.js test_whiteboard.js
 
   macos:
     runs-on: macos-14
