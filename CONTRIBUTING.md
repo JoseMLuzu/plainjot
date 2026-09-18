@@ -13,8 +13,12 @@ Before opening a pull request:
 ```bash
 python3 -m unittest -v
 node --check static/app.js
+node --check static/whiteboard.js
+node --test test_frontend.js test_whiteboard.js
 ./scripts/build_macos_app.sh
 ./dist/PlainJot.app/Contents/MacOS/PlainJot --self-test
 ```
 
 Do not include personal notes, generated apps, archives, credentials, or signing material. By contributing, you agree that your changes are provided under the repository's MPL-2.0 license.
+
+Developer starter templates live in `plainjot_core/templates.json`; both app backends and the CLI use that catalog. Keep prompts short and avoid new entity types or task states.

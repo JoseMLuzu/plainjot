@@ -16,15 +16,16 @@ Una libreta Markdown y bandeja de tareas local-first para humanos y coding agent
 
 PlainJot es deliberadamente pequeño. No es un workspace, grafo de conocimiento o gestor de proyectos. Los archivos `.md` de la carpeta elegida —`~/Documents/PlainJot` por defecto— siempre son la fuente de verdad.
 
-Las notas con encabezados Markdown muestran un índice ligero a la derecha para navegar documentos largos sin añadir metadatos al archivo.
+Las notas con encabezados Markdown muestran un índice ligero a la derecha. Pulsa **Ocultar índice** para ampliar el documento; tu elección se recuerda localmente. Los títulos son más compactos y se desplazan con la vista previa, sin quedarse fijos mientras lees.
 
 ## Qué hace
 
-PlainJot tiene tres secciones sencillas:
+PlainJot tiene dos secciones sencillas:
 
-- **Notes** para documentos Markdown normales.
-- **Inbox** para tareas creadas por agentes u otras herramientas.
-- **Tasks** para trabajo pendiente y completado, con un Sprint View opcional de tres columnas.
+- **Documentos** para notas, journals, roadmaps, decisiones, reviews, refactorizaciones, handoffs y pizarras. Una etiqueta discreta indica el tipo de cada documento.
+- **Tareas** con filtros **Inbox**, **Pendientes** y **Hechas**, más Sprint View opcional. Acepta las propuestas de Inbox para pasarlas a Pendientes.
+
+Elige un proyecto si lo necesitas, pulsa **+ Crear** y selecciona directamente el tipo. No hay un modo de desarrollo ni un dropdown de plantillas que configurar antes. Las tareas creadas por humanos empiezan en `todo`; la CLI conserva `inbox` como predeterminado para propuestas de agentes.
 
 La lista de tareas sigue siendo la vista predeterminada. Sprint View solo ordena las mismas tareas Markdown como **Inbox**, **Por hacer** y **Hecho**; no añade tableros, metadatos de sprint ni otra fuente de verdad.
 
@@ -33,6 +34,46 @@ La app observa la carpeta PlainJot en macOS, por lo que las creaciones, edicione
 Eliminar desde la app nativa mueve el archivo Markdown a la Papelera de macOS para que siga siendo recuperable.
 
 Pulsa la ruta de la esquina inferior izquierda para elegir otra carpeta local. PlainJot la recuerda, reinicia el watcher y comparte la selección con la CLI. Los archivos existentes nunca se mueven automáticamente.
+
+## Debug Journal
+
+Pulsa **+ Crear → Debug Journal** para crear un registro en Documentos. Incluye: Síntoma, Hipótesis, Investigación, Root cause, Solución y Qué aprendí.
+
+Los registros siguen siendo notas normales en la misma carpeta, identificadas con `type: note` y `kind: debug-journal` en el frontmatter YAML. Aparecen junto al resto de documentos; cambiar de pestaña no mueve ni elimina archivos. Los agentes pueden escribir ese frontmatter directamente o ejecutar:
+
+```bash
+plainjot add "Bug: Journal no abría" --kind debug-journal \
+  --body "## Síntoma
+
+Open Journal no hacía nada."
+plainjot list --journals
+```
+
+La app y la CLI comparten las mismas plantillas. `--body` sustituye el texto inicial, incluso si se proporciona vacío. Estos registros no son tareas ni tienen estados de tarea.
+
+## Libreta para desarrolladores
+
+El menú **+ Crear** incluye **Ticket**, **Roadmap**, **Decisión técnica**, **Refactorización**, **Review** y **Handoff de sesión**, además de Debug Journal. Los tickets son Tareas normales con criterios de aceptación en el cuerpo. Las demás plantillas son notas con un campo `kind` agrupadas en Documentos. Las notas antiguas o con tipos desconocidos siguen visibles en la misma lista.
+
+El filtro **Proyecto**, encima de la navegación, agrupa documentos y tareas, incluido Sprint View. Los elementos nuevos heredan el proyecto seleccionado; **Todos los proyectos** no exige asignar uno. Edita el proyecto en **Escribir** (o **Markdown** para pizarras); la vista previa oculta los controles de metadatos. Son metadatos YAML, no carpetas; las notas antiguas no necesitan migración. Vaciar el campo quita la asignación, no el documento.
+
+```bash
+plainjot task "Corregir login" --template ticket --project mi-app --source codex
+plainjot add "Decisión de arquitectura" --kind decision --project mi-app
+plainjot add "Retomar mañana" --kind handoff --project mi-app --source claude-code
+plainjot list --inbox --project mi-app
+plainjot search "login" --project mi-app
+```
+
+Enlaza documentos con Markdown normal, por ejemplo `[Investigación del login](bug-login.md)`. En vista previa el enlace abre ese archivo de la carpeta activa dentro de PlainJot. No se permiten rutas absolutas, rutas padre, subcarpetas ni symlinks. Renombrar un archivo no actualiza sus referencias automáticamente. Las listas de verificación se muestran en vista previa; sus marcas `[ ]` / `[x]` se cambian en Escribir.
+
+Cualquier agente con acceso local al filesystem puede usar los comandos o escribir Markdown directamente. No requiere una conexión con la app ni una integración específica. Las plantillas son guías para completar, no hallazgos generados automáticamente.
+
+## Pizarra
+
+Pulsa **+ Crear → Pizarra** para dibujar dentro de Documentos. Incluye lápiz, borrador de trazos completos, rectángulos, flechas, texto, cuatro colores y deshacer/rehacer. Los dibujos se guardan automáticamente con el mismo almacenamiento de las notas. Puedes exportar SVG con el diálogo nativo de guardado o mediante una descarga en el navegador durante desarrollo. No incluye PNG ni colaboración.
+
+Cada pizarra es un `.md` normal con `type: note`, `kind: whiteboard`, proyecto opcional y un bloque JSON `plainjot-whiteboard`. Consulta [el formato del dibujo](docs/WHITEBOARD.md). Los agentes pueden crear o editar esos archivos directamente; los conflictos protegen el borrador local. Enlaza una pizarra desde un journal con `[Flujo](arquitectura.md)`; debajo del lienzo aparece un enlace listo para copiar. Los datos inválidos o de una versión desconocida se conservan y se pueden corregir en la pestaña **Markdown**.
 
 ## Compilar la app para macOS
 
@@ -152,6 +193,7 @@ El Core Python puede reutilizarse en un futuro servidor MCP pequeño. El Core Sw
 ```bash
 python3 -m unittest -v
 node --check static/app.js
+node --test test_frontend.js test_whiteboard.js
 ./scripts/build_macos_app.sh
 ./dist/PlainJot.app/Contents/MacOS/PlainJot --self-test
 ```

@@ -6,6 +6,12 @@ All notable changes are documented here. PlainJot follows semantic versioning on
 
 ### Added
 
+- Markdown-backed whiteboards with pen, eraser, rectangles, arrows, text, undo/redo, and safe SVG export
+- Developer note templates, including a Debug Journal with six debugging sections
+- Debug Journal Markdown notes supported by both storage cores and the CLI
+- Shared project metadata and filtering across notes, journals, tasks, and Sprint View
+- One developer template catalog for the app and CLI: tickets, roadmaps, decisions, refactoring, reviews, and session handoffs
+- Same-folder Markdown references and read-only checklist rendering in preview
 - Markdown tasks with YAML frontmatter and `inbox`, `todo`, and `done` states
 - Agent Inbox and Tasks sections in the shared interface
 - Native debounced filesystem watcher
@@ -19,6 +25,10 @@ All notable changes are documented here. PlainJot follows semantic versioning on
 - Clickable document outline generated from Markdown headings
 
 ### Changed
+
+- Compact document titles scroll with the reading preview; the right outline can be hidden to expand the document, with its visibility remembered locally
+- Two-section navigation: Documents collects notes, developer templates, and whiteboards; Tasks contains Inbox/Pending/Done filters, with one direct Create menu
+- Grouped sidebar navigation and filters, with consistently styled keyboard-accessible native dropdowns
 
 - Existing notes and tasks open in preview, while newly created documents open in write mode
 - Native deletions move Markdown files to the macOS Trash

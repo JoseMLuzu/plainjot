@@ -19,6 +19,8 @@ PlainJot grows by making local Markdown more useful, not by becoming a workspace
 - Stable CLI
 - Improved installation and release archives
 - Refined human/agent handoff patterns
+- Developer documents: Debug Journal, project filters, and Markdown work templates
+- Simple tickets using the existing task lifecycle and same-folder document references
 
 ## v0.4 — MCP
 
