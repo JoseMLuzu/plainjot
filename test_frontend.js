@@ -48,7 +48,7 @@ class Element {
   releasePointerCapture() { this.pointerId = null; }
 }
 
-async function setup({ legacyDeveloperMode = false, animationFrames = true, outlineHidden = false } = {}) {
+async function setup({ legacyDeveloperMode = false, animationFrames = true, outlineHidden = false, sidebarHidden = false } = {}) {
   const nodes = new Map();
   const node = (selector) => {
     if (!nodes.has(selector)) nodes.set(selector, new Element());
@@ -74,6 +74,7 @@ async function setup({ legacyDeveloperMode = false, animationFrames = true, outl
   const storage = new Map();
   storage.set("plainjot-developer-mode", String(legacyDeveloperMode));
   storage.set("plainjot-outline-hidden", String(outlineHidden));
+  storage.set("plainjot-sidebar-hidden", String(sidebarHidden));
   const notes = [
     { id: "ordinary.md", title: "Ordinary note", body: "Text", type: "note", kind: "" },
     { id: "external-journal.md", title: "Bug: External", body: "## Síntoma\n\nNothing happened.", type: "note", kind: "debug-journal" },
@@ -447,6 +448,67 @@ test("outline navigation includes the scrolling title and works without animatio
   assert.equal(preview.scrollTop, 296);
   ui.run("jumpToHeading('missing-heading')");
   assert.equal(preview.scrollTop, 296);
+});
+
+test("sidebar toggle preserves the document, scroll position and unsaved draft", async () => {
+  const ui = await setup();
+  await ui.run("selectDocument('external-journal.md')");
+  ui.node("#markdown-preview").scrollTop = 160;
+  const html = ui.node("#markdown-preview").innerHTML;
+  ui.node("#note-body").value = "Unsaved draft";
+  ui.node("#sidebar-toggle").listeners.get("click")();
+  assert.equal(ui.node("#notes-sidebar").classList.contains("hidden"), true);
+  assert.equal(ui.node("#app-shell").classList.contains("sidebar-collapsed"), true);
+  assert.equal(ui.node("#sidebar-toggle").attributes.get("aria-expanded"), "false");
+  assert.equal(ui.node("#sidebar-toggle").attributes.get("aria-label"), "Mostrar barra lateral");
+  assert.equal(ui.storage.get("plainjot-sidebar-hidden"), "true");
+  assert.equal(ui.node("#note-body").value, "Unsaved draft");
+  assert.equal(ui.node("#markdown-preview").innerHTML, html);
+  assert.equal(ui.node("#markdown-preview").scrollTop, 160);
+  assert.equal(ui.run("state.selectedId"), "external-journal.md");
+  assert.equal(ui.node("#document-outline").classList.contains("hidden"), false);
+  assert.equal(ui.posts.length, 0);
+  ui.run("setSidebarHidden(false)");
+  assert.equal(ui.node("#sidebar-toggle").attributes.get("aria-expanded"), "true");
+  assert.equal(ui.node("#notes-sidebar").classList.contains("hidden"), false);
+});
+
+test("sidebar and outline preferences are independent and restored locally", async () => {
+  const ui = await setup({ sidebarHidden: true, outlineHidden: true });
+  assert.equal(ui.node("#app-shell").classList.contains("sidebar-collapsed"), true);
+  await ui.run("selectDocument('external-journal.md')");
+  assert.equal(ui.node("#document-outline").classList.contains("hidden"), true);
+  ui.run("toggleDocumentOutline()");
+  assert.equal(ui.node("#document-outline").classList.contains("hidden"), false);
+  assert.equal(ui.run("state.sidebarHidden"), true);
+  ui.run("setSidebarHidden(false)");
+  assert.equal(ui.run("state.outlineHidden"), false);
+  assert.equal(ui.node("#document-outline").classList.contains("hidden"), false);
+});
+
+test("Create and Search shortcuts reveal hidden navigation rather than focusing invisible controls", async () => {
+  const ui = await setup({ sidebarHidden: true });
+  const keydown = ui.documentListeners.get("keydown");
+  keydown({ key: "n", metaKey: true, preventDefault() {} });
+  assert.equal(ui.run("state.sidebarHidden"), false);
+  assert.equal(ui.node("#create-menu").classList.contains("hidden"), false);
+  ui.run("setSidebarHidden(true)");
+  assert.equal(ui.node("#create-menu").classList.contains("hidden"), true);
+  keydown({ key: "k", metaKey: true, preventDefault() {} });
+  assert.equal(ui.node("#notes-sidebar").classList.contains("hidden"), false);
+  assert.equal(ui.storage.get("plainjot-sidebar-hidden"), "false");
+  assert.equal(ui.posts.length, 0);
+});
+
+test("title separator wrapper follows write/preview modes without leaving an empty divider", async () => {
+  const ui = await setup();
+  await ui.run("selectDocument('ordinary.md')");
+  assert.equal(ui.node("#title-heading").classList.contains("hidden"), true);
+  ui.run("setView('write')");
+  assert.equal(ui.node("#title-heading").classList.contains("hidden"), false);
+  await ui.run("chooseCreation('whiteboard')");
+  ui.run("setView('preview')");
+  assert.equal(ui.node("#title-heading").classList.contains("hidden"), false);
 });
 
 test("Markdown references allow same-folder documents but not arbitrary paths", async () => {

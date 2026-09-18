@@ -19,6 +19,7 @@ const state = {
   projectOptionsKey: null,
   templates: [],
   outlineHidden: false,
+  sidebarHidden: false,
 };
 
 function isWhiteboard(item) {
@@ -26,6 +27,9 @@ function isWhiteboard(item) {
 }
 
 const elements = {
+  shell: document.querySelector("#app-shell"),
+  sidebar: document.querySelector("#notes-sidebar"),
+  sidebarToggle: document.querySelector("#sidebar-toggle"),
   projectFilter: document.querySelector("#project-filter"),
   createMenu: document.querySelector("#create-menu"),
   createOptions: document.querySelector("#create-options"),
@@ -52,6 +56,7 @@ const elements = {
   whiteboardPanel: document.querySelector("#whiteboard-panel"),
   whiteboardReference: document.querySelector("#whiteboard-reference"),
   title: document.querySelector("#note-title"),
+  titleHeading: document.querySelector("#title-heading"),
   body: document.querySelector("#note-body"),
   preview: document.querySelector("#markdown-preview"),
   outline: document.querySelector("#document-outline"),
@@ -356,6 +361,7 @@ function closeCreateMenu({ focus = false } = {}) {
 }
 
 function toggleCreateMenu() {
+  if (state.sidebarHidden) setSidebarHidden(false);
   if (state.creating) return;
   if (!elements.createMenu.classList.contains("hidden")) return closeCreateMenu({ focus: true });
   if (!elements.createOptions.children.length) renderCreateOptions();
@@ -904,6 +910,7 @@ function setView(view, { focus = true } = {}) {
   elements.previewTab.setAttribute("aria-selected", String(isPreview));
   elements.body.classList.toggle("hidden", isPreview);
   elements.title.classList.toggle("hidden", isPreview && !board);
+  elements.titleHeading.classList.toggle("hidden", isPreview && !board);
   elements.documentProject.parentElement.classList.toggle("hidden", isPreview);
   elements.preview.classList.toggle("hidden", !isPreview || board);
   resizeTitle();
@@ -1139,6 +1146,26 @@ function toggleDocumentOutline() {
   resizeTitle();
 }
 
+function setSidebarHidden(hidden, { persist = true } = {}) {
+  state.sidebarHidden = hidden;
+  elements.shell.classList.toggle("sidebar-collapsed", hidden);
+  elements.sidebar.classList.toggle("hidden", hidden);
+  elements.sidebarToggle.setAttribute("aria-expanded", String(!hidden));
+  const label = hidden ? "Mostrar barra lateral" : "Ocultar barra lateral";
+  elements.sidebarToggle.setAttribute("aria-label", label);
+  elements.sidebarToggle.title = label;
+  if (hidden) closeCreateMenu();
+  if (persist) {
+    try {
+      localStorage.setItem("plainjot-sidebar-hidden", String(hidden));
+    } catch {
+      // Reading layout works even when local preferences cannot be saved.
+    }
+  }
+  resizeTitle();
+  updateOutlineActive();
+}
+
 function markdownToHtml(markdown) {
   const lines = markdown.replaceAll("\r\n", "\n").split("\n");
   const headings = new Map(parseMarkdownHeadings(markdown).map((heading) => [heading.lineIndex, heading]));
@@ -1302,6 +1329,7 @@ elements.taskAction.addEventListener("click", transitionTask);
 elements.writeTab.addEventListener("click", () => setView("write"));
 elements.previewTab.addEventListener("click", () => setView("preview"));
 elements.outlineToggle.addEventListener("click", toggleDocumentOutline);
+elements.sidebarToggle.addEventListener("click", () => setSidebarHidden(!state.sidebarHidden));
 elements.preview.addEventListener("scroll", updateOutlineActive, { passive: true });
 elements.search.addEventListener("input", () => {
   renderList();
@@ -1336,6 +1364,7 @@ document.addEventListener("keydown", (event) => {
     createForCurrentSection();
   } else if (modifier && event.key.toLowerCase() === "k") {
     event.preventDefault();
+    if (state.sidebarHidden) setSidebarHidden(false);
     elements.search.focus();
     elements.search.select();
   } else if (modifier && event.key.toLowerCase() === "s") {
@@ -1355,9 +1384,11 @@ window.addEventListener("beforeunload", () => {
 
 try {
   state.outlineHidden = localStorage.getItem("plainjot-outline-hidden") === "true";
+  state.sidebarHidden = localStorage.getItem("plainjot-sidebar-hidden") === "true";
 } catch {
   // Preferences are optional; Markdown files remain the source of truth.
 }
+setSidebarHidden(state.sidebarHidden, { persist: false });
 const savedTheme = localStorage.getItem("plainjot-theme") || localStorage.getItem("notas-theme");
 const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 applyTheme(savedTheme || preferredTheme);
