@@ -21,3 +21,6 @@ plainjot = "plainjot_core.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["plainjot_core*"]
+
+[tool.setuptools.package-data]
+plainjot_core = ["templates.json"]

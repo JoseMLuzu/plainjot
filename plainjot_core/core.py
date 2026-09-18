@@ -18,6 +18,7 @@ MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_TITLE_LENGTH = 200
 MAX_METADATA_LENGTH = 200
 TASK_STATUSES = frozenset({"inbox", "todo", "done"})
+NOTE_KINDS = frozenset({"", "debug-journal", "roadmap", "decision", "refactor", "review", "handoff", "whiteboard"})
 TASK_FIELDS = ("type", "status", "project", "source", "created", "completed")
 VALID_DOCUMENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
 VALID_FRONTMATTER_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
@@ -60,11 +61,12 @@ class Document:
             "title": self.title,
             "body": self.body,
             "type": "task" if self.is_task else "note",
+            "kind": "" if self.is_task else self.metadata.get("kind", ""),
             "modified": self.modified,
             "revision": self.revision,
         }
         for key in TASK_FIELDS[1:]:
-            result[key] = (self.status if key == "status" else self.metadata.get(key, "")) if self.is_task else ""
+            result[key] = self.status if key == "status" else self.metadata.get(key, "")
         return result
 
 
@@ -300,11 +302,17 @@ class PlainJotStore:
     def get_note(self, document_id: str) -> dict:
         return self.get_document(document_id)
 
-    def create_note(self, title: str, body: str = "") -> dict:
+    def create_note(self, title: str, body: str = "", *, kind: str = "", project: str = "", source: str = "") -> dict:
+        if kind not in NOTE_KINDS:
+            raise InvalidDocument("Unsupported note kind")
         clean_title = _clean_title(title)
         document_id = f"{slugify(clean_title)}-{uuid.uuid4().hex[:7]}.md"
         path = self._path_for(document_id)
-        self._atomic_write(path, render_markdown(clean_title, body))
+        project = self._metadata_value(project, "project")
+        source = self._metadata_value(source, "source")
+        metadata = {"type": "note", "kind": kind, "project": project, "source": source, "created": self._timestamp()}
+        frontmatter = "\n".join(f"{key}: {_format_yaml_value(value)}" for key, value in metadata.items()) if kind or project or source else None
+        self._atomic_write(path, _render_preserving_frontmatter(clean_title, body, frontmatter))
         return self.get_document(document_id)
 
     def create_task(
@@ -340,11 +348,22 @@ class PlainJotStore:
         body: str,
         *,
         expected_revision: str | None = None,
+        project: str | None = None,
     ) -> dict:
         path = self._path_for(document_id)
         existing = self._read(path)
         self._check_revision(existing, expected_revision)
-        content = _render_preserving_frontmatter(title, body, existing.frontmatter_raw)
+        raw = existing.frontmatter_raw
+        if project is not None:
+            value = self._metadata_value(project, "project")
+            if value != existing.metadata.get("project", ""):
+                lines = (raw or "").splitlines()
+                lines = [line for line in lines if line.split(":", 1)[0].strip() != "project"]
+                lines.append(f"project: {_format_yaml_value(value)}")
+                if len(lines) >= 100:
+                    raise InvalidDocument("Frontmatter is too large to add a project")
+                raw = "\n".join(lines)
+        content = _render_preserving_frontmatter(title, body, raw)
         self._atomic_write(path, content)
         return self.get_document(document_id)
 

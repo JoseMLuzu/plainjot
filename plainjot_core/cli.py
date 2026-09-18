@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .core import InvalidDocument, PlainJotStore, default_notes_dir
+from .templates import get_template, list_templates
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,22 +25,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     add = commands.add_parser("add", help="Create a note")
     add.add_argument("title")
-    add.add_argument("--body", default="")
+    add.add_argument("--body", default=None)
+    add.add_argument("--kind", choices=tuple(t["id"] for t in list_templates() if t["type"] == "note"), default="", help="Use a developer note template")
+    add.add_argument("--project", default="")
+    add.add_argument("--source", default="")
 
     task = commands.add_parser("task", help="Create a task in the agent inbox")
     task.add_argument("title")
-    task.add_argument("--body", default="")
+    task.add_argument("--body", default=None)
+    task.add_argument("--template", choices=("ticket",), help="Use acceptance criteria and implementation prompts")
     task.add_argument("--project", default="")
     task.add_argument("--source", default="")
     task.add_argument("--status", choices=("inbox", "todo"), default="inbox")
 
     listing = commands.add_parser("list", help="List notes or tasks")
+    listing.add_argument("--project", help="Filter by exact project name")
     filters = listing.add_mutually_exclusive_group()
     filters.add_argument("--tasks", action="store_true", help="List todo and completed tasks")
     filters.add_argument("--inbox", action="store_true", help="List inbox tasks")
+    filters.add_argument("--journals", action="store_true", help="List Debug Journal notes")
 
     search = commands.add_parser("search", help="Search all notes and tasks")
     search.add_argument("query")
+    search.add_argument("--project", help="Filter by exact project name")
 
     done = commands.add_parser("done", help="Mark a task as done")
     done.add_argument("task", help="Task filename, unique filename prefix, or exact title")
@@ -51,13 +59,19 @@ def _print_items(items: list[dict]) -> None:
         print("No matching items.")
         return
     for item in items:
+        context = " · ".join(value for value in (item.get("project"), item.get("source")) if value)
+        suffix = f"  {context}" if context else ""
         if item["type"] == "task":
             mark = "✓" if item["status"] == "done" else "○"
-            context = " · ".join(value for value in (item.get("project"), item.get("source")) if value)
-            suffix = f"  {context}" if context else ""
             print(f"{mark} {item['title']}  [{item['id']}]{suffix}")
         else:
-            print(f"• {item['title']}  [{item['id']}]")
+            print(f"• {item['title']}  [{item['id']}]{suffix}")
+
+
+def _creation_body(body: str | None, template: str | None) -> str:
+    if body is not None:
+        return body
+    return get_template(template)["body"] if template else ""
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -65,12 +79,13 @@ def run(argv: list[str] | None = None) -> int:
     store = PlainJotStore(args.notes_dir or default_notes_dir())
 
     if args.command == "add":
-        document = store.create_note(args.title, args.body)
+        body = _creation_body(args.body, args.kind)
+        document = store.create_note(args.title, body, kind=args.kind, project=args.project, source=args.source)
         print(document["id"])
     elif args.command == "task":
         document = store.create_task(
             args.title,
-            args.body,
+            _creation_body(args.body, args.template),
             status=args.status,
             project=args.project,
             source=args.source,
@@ -78,13 +93,16 @@ def run(argv: list[str] | None = None) -> int:
         print(document["id"])
     elif args.command == "list":
         if args.inbox:
-            _print_items(store.list_tasks({"inbox"}))
+            items = store.list_tasks({"inbox"})
         elif args.tasks:
-            _print_items(store.list_tasks({"todo", "done"}))
+            items = store.list_tasks({"todo", "done"})
+        elif args.journals:
+            items = [note for note in store.list_notes() if note["kind"] == "debug-journal"]
         else:
-            _print_items(store.list_notes())
+            items = store.list_notes()
+        _print_items([item for item in items if args.project is None or item["project"] == args.project])
     elif args.command == "search":
-        _print_items(store.search(args.query))
+        _print_items([item for item in store.search(args.query) if args.project is None or item["project"] == args.project])
     elif args.command == "done":
         document = store.complete_task(args.task)
         print(f"✓ {document['title']}  [{document['id']}]")

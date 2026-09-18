@@ -10,6 +10,7 @@ bin_dir="$local_root/bin"
 mkdir -p "$share_dir" "$bin_dir"
 mkdir -p "$share_dir/plainjot_core"
 cp "$project_dir/plainjot_core/"*.py "$share_dir/plainjot_core/"
+cp "$project_dir/plainjot_core/templates.json" "$share_dir/plainjot_core/templates.json"
 install -m 755 "$project_dir/plainjot" "$bin_dir/plainjot"
 
 echo "Installed plainjot at $bin_dir/plainjot"

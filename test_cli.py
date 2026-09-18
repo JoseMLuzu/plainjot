@@ -35,6 +35,23 @@ class PlainJotCLITests(unittest.TestCase):
         listing = self.run_cli("list")
         self.assertIn("My note", listing.stdout)
 
+    def test_developer_templates_projects_and_handoff(self):
+        store = PlainJotStore(self.notes_dir)
+        roadmap = self.run_cli("add", "Plan", "--kind", "roadmap", "--project", "alpha", "--source", "codex").stdout.strip()
+        self.assertIn("## Por hacer", store.get_document(roadmap)["body"])
+        self.assertEqual(store.get_document(roadmap)["source"], "codex")
+        handoff = self.run_cli("add", "Session", "--kind", "handoff", "--project", "beta").stdout.strip()
+        self.assertIn("## Próximo paso", store.get_document(handoff)["body"])
+        self.assertIn(roadmap, self.run_cli("list", "--project", "alpha").stdout)
+        self.assertNotIn(handoff, self.run_cli("list", "--project", "alpha").stdout)
+        self.assertNotIn(roadmap, self.run_cli("search", "Plan", "--project", "beta").stdout)
+        ticket = self.run_cli("task", "Fix login", "--template", "ticket", "--project", "alpha").stdout.strip()
+        self.assertIn("- [ ]", store.get_document(ticket)["body"])
+        self.assertEqual(store.get_document(ticket)["status"], "inbox")
+        self.assertIn(ticket, self.run_cli("list", "--inbox", "--project", "alpha").stdout)
+        custom = self.run_cli("add", "Custom", "--kind", "review", "--body", "").stdout.strip()
+        self.assertEqual(store.get_document(custom)["body"], "")
+
     def test_task_inbox_search_and_done(self):
         created = self.run_cli(
             "task",
@@ -62,6 +79,17 @@ class PlainJotCLITests(unittest.TestCase):
         result = self.run_cli("done", "missing-task", check=False)
         self.assertEqual(result.returncode, 1)
         self.assertIn("task not found", result.stderr)
+
+    def test_add_and_list_debug_journals(self):
+        created = self.run_cli("add", "Bug: Journal", "--kind", "debug-journal", "--body", "## Root cause\n\nWrong state update.")
+        self.run_cli("add", "Ordinary note")
+        journal_id = created.stdout.strip()
+        self.assertEqual(PlainJotStore(self.notes_dir).get_document(journal_id)["kind"], "debug-journal")
+        listing = self.run_cli("list", "--journals")
+        self.assertIn(journal_id, listing.stdout)
+        self.assertNotIn("Ordinary note", listing.stdout)
+        self.assertIn(journal_id, self.run_cli("list").stdout)
+        self.assertIn(journal_id, self.run_cli("search", "state update").stdout)
 
 
 if __name__ == "__main__":
