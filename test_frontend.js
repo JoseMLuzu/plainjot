@@ -38,10 +38,11 @@ class Element {
     return selector === "button" ? this.children.flatMap((child) => [...(child.tag === "button" ? [child] : []), ...(child.querySelectorAll?.(selector) || [])]) : [];
   }
   contains(target) { return target === this || this.children.some((child) => child.contains?.(target)); }
-  focus() {}
+  focus() { this.focused = true; }
   blur() {}
   select() {}
   scrollTo(options) { this.scrollTop = options.top; }
+  scrollIntoView() {}
   getBoundingClientRect() { return { top: 0, left: 0, width: 1600, height: 1000 }; }
   setPointerCapture(id) { this.pointerId = id; }
   hasPointerCapture(id) { return this.pointerId === id; }
@@ -56,7 +57,12 @@ async function setup({ legacyDeveloperMode = false, animationFrames = true, outl
   };
   node("#new-item").append(new Element("span"), new Element("span"));
   node("#document-project").parentElement = new Element("label");
+  const typeShell = new Element("span"); typeShell.parentElement = new Element("label");
+  node("#document-type-select").parentElement = typeShell;
+  const parentShell = new Element("span"); parentShell.parentElement = new Element("label");
+  node("#document-parent").parentElement = parentShell;
   node("#create-menu").classList.add("hidden");
+  node("#document-switcher").classList.add("hidden");
   for (const status of ["inbox", "todo", "done"]) {
     const button = new Element("button"); button.dataset.taskFilter = status;
     node("#task-filters").append(button);
@@ -66,7 +72,7 @@ async function setup({ legacyDeveloperMode = false, animationFrames = true, outl
     button.dataset.taskLayout = layout;
     node("#task-view-toggle").append(button);
   }
-  const sections = ["notes", "tasks"].map((section) => {
+  const sections = ["map", "notes", "analysis", "tasks"].map((section) => {
     const button = new Element("button");
     button.dataset.section = section;
     return button;
@@ -139,9 +145,10 @@ async function setup({ legacyDeveloperMode = false, animationFrames = true, outl
   return { node, storage, notes, tasks, posts, sections, documentListeners, run: (source) => vm.runInContext(source, context) };
 }
 
-test("two primary sections collect ordinary and developer documents together", async () => {
+test("Notes, Analyses and Tasks are separate while developer notes remain discoverable", async () => {
   const ui = await setup();
-  assert.equal(ui.sections.length, 2);
+  assert.equal(ui.sections.length, 4);
+  assert.equal(ui.node("#project-map-nav").classList.contains("hidden"), true);
   assert.equal(ui.run("sectionItems('notes').length"), 2);
   assert.equal(ui.node("#notes-count").textContent, 2);
 });
@@ -152,7 +159,7 @@ test("Create exposes every type without creating a file and Escape closes it", a
   assert.equal(ui.node("#create-menu").classList.contains("hidden"), false);
   assert.equal(ui.posts.length, 0);
   const choices = ui.node("#create-options").querySelectorAll("button").map((button) => button.dataset.creation);
-  for (const kind of ["note", "task", "whiteboard", "debug-journal", "ticket", "roadmap", "decision", "refactor", "review", "handoff"]) assert.ok(choices.includes(kind));
+  for (const kind of ["note", "idea", "analysis", "task", "whiteboard", "debug-journal", "ticket", "roadmap", "decision", "refactor", "review", "handoff"]) assert.ok(choices.includes(kind));
   ui.documentListeners.get("keydown")({ key: "Escape", preventDefault() {} });
   assert.equal(ui.node("#create-menu").classList.contains("hidden"), true);
   assert.equal(ui.node("#new-item").attributes.get("aria-expanded"), "false");
@@ -356,6 +363,29 @@ test("Inbox, pending and completed work are filters within Tasks", async () => {
   assert.equal(ui.run("state.taskFilter"), "todo");
 });
 
+test("task circles change status from the sidebar without opening the task", async () => {
+  const ui = await setup();
+  ui.tasks.push({ id: "sidebar-task.md", title: "Complete from list", type: "task", status: "todo", project: "", source: "", body: "", preview: "", modified: "2026-09-18T10:00:00Z", revision: "1" });
+  await ui.run("loadCollections()");
+  await ui.run("changeSection('tasks')");
+
+  const taskCard = ui.node("#notes-list").children[0];
+  const taskMark = taskCard.children[0];
+  let prevented = false;
+  let stopped = false;
+  await taskMark.listeners.get("click")({
+    preventDefault() { prevented = true; },
+    stopPropagation() { stopped = true; },
+  });
+
+  assert.equal(prevented, true);
+  assert.equal(stopped, true);
+  assert.equal(ui.tasks[0].status, "done");
+  assert.equal(ui.run("state.selectedId"), null);
+  assert.equal(ui.node("#todo-count").textContent, 0);
+  assert.equal(ui.node("#done-count").textContent, 1);
+});
+
 test("Sprint shows all statuses and hides list-only filters", async () => {
   const ui = await setup();
   for (const status of ["inbox", "todo", "done"]) ui.tasks.push({ id: `${status}.md`, title: status, type: "task", status, preview: "", modified: "2026-09-18T10:00:00Z" });
@@ -368,6 +398,38 @@ test("Sprint shows all statuses and hides list-only filters", async () => {
   await ui.run("setTaskLayout('list')");
   assert.equal(ui.node("#task-filters").classList.contains("hidden"), false);
   assert.equal(ui.run("sectionItems().length"), 1);
+});
+
+test("Sprint cards move between status columns with drag and drop", async () => {
+  const ui = await setup();
+  ui.tasks.push({ id: "drag-task.md", title: "Move me", type: "task", status: "todo", project: "", source: "", body: "", preview: "", modified: "2026-09-18T10:00:00Z", revision: "1" });
+  await ui.run("loadCollections()");
+  await ui.run("changeSection('tasks')");
+  await ui.run("setTaskLayout('sprint')");
+
+  let transferred = "";
+  const dataTransfer = {
+    setData(type, value) { if (type === "text/plain") transferred = value; },
+    getData(type) { return type === "text/plain" ? transferred : ""; },
+  };
+  const columns = ui.node("#sprint-columns").children;
+  const todoCard = columns[1].children[1].children[0];
+  todoCard.listeners.get("dragstart")({ dataTransfer });
+  let prevented = false;
+  columns[2].listeners.get("dragover")({ preventDefault() { prevented = true; }, dataTransfer });
+  await columns[2].listeners.get("drop")({ preventDefault() {}, dataTransfer });
+
+  assert.equal(prevented, true);
+  assert.equal(ui.tasks[0].status, "done");
+  assert.equal(ui.run("state.taskLayout"), "sprint");
+  assert.equal(ui.node("#done-count").textContent, 1);
+
+  const refreshedColumns = ui.node("#sprint-columns").children;
+  const doneCard = refreshedColumns[2].children[1].children[0];
+  doneCard.listeners.get("dragstart")({ dataTransfer });
+  await refreshedColumns[0].listeners.get("drop")({ preventDefault() {}, dataTransfer });
+  assert.equal(ui.tasks[0].status, "inbox");
+  assert.equal(ui.node("#inbox-count").textContent, 1);
 });
 
 test("preview is quiet and project editing remains accessible in write mode", async () => {
@@ -509,6 +571,169 @@ test("title separator wrapper follows write/preview modes without leaving an emp
   await ui.run("chooseCreation('whiteboard')");
   ui.run("setView('preview')");
   assert.equal(ui.node("#title-heading").classList.contains("hidden"), false);
+});
+
+test("analyses have a separate section and old notes are not silently classified", async () => {
+  const ui = await setup();
+  ui.notes[0].title = "Análisis de autenticación";
+  assert.equal(ui.run("sectionItems('analysis').length"), 0);
+  await ui.run("chooseCreation('analysis')");
+  assert.equal(ui.run("state.section"), "analysis");
+  assert.equal(ui.node("#analysis-count").textContent, 1);
+  assert.equal(ui.node("#notes-count").textContent, 2);
+  assert.equal(ui.node("#context-kind").textContent, "Análisis");
+  await ui.run("changeSection('notes')");
+  assert.equal(ui.run("sectionItems().length"), 2);
+  await ui.run("openDocumentFromSystem('created-1.md')");
+  assert.equal(ui.run("state.section"), "analysis");
+});
+
+test("existing notes can change kind and return to Notes without changing body or filename", async () => {
+  const ui = await setup();
+  await ui.run("selectDocument('ordinary.md');");
+  ui.run("setView('write')");
+  assert.equal(ui.node("#document-type-select").parentElement.parentElement.classList.contains("hidden"), false);
+  ui.node("#document-type-select").value = "analysis";
+  ui.node("#document-type-select").listeners.get("change")();
+  await ui.run("saveCurrent()");
+  assert.equal(ui.run("state.section"), "analysis");
+  assert.equal(ui.notes[0].kind, "analysis");
+  assert.equal(ui.notes[0].body, "Text");
+  assert.equal(ui.run("state.selectedId"), "ordinary.md");
+  ui.node("#document-type-select").value = "";
+  await ui.run("saveCurrent()");
+  assert.equal(ui.run("state.section"), "notes");
+});
+
+test("reclassification drafts survive external conflicts and are applied only on explicit resolution", async () => {
+  const ui = await setup();
+  await ui.run("selectDocument('ordinary.md')");
+  ui.node("#document-type-select").value = "analysis";
+  await ui.run("enterSaveConflict('ordinary.md')");
+  const draft = JSON.parse([...ui.storage.entries()].find(([key]) => key.startsWith("plainjot-conflict:"))[1]);
+  assert.equal(draft.kind, "analysis");
+  assert.equal(ui.notes[0].kind, "");
+  await ui.run("keepLocalConflictVersion()");
+  assert.equal(ui.notes[0].kind, "analysis");
+  assert.equal(ui.run("state.section"), "analysis");
+});
+
+test("unknown note kinds are preserved and task/whiteboard type controls stay hidden", async () => {
+  const ui = await setup();
+  ui.notes[0].kind = "agent-custom";
+  await ui.run("selectDocument('ordinary.md')");
+  assert.equal(ui.node("#document-type-select").value, "agent-custom");
+  assert.equal(ui.run("Object.hasOwn(documentUpdatePayload('1'), 'kind')"), false);
+  await ui.run("chooseCreation('whiteboard')");
+  assert.equal(ui.node("#document-type-select").parentElement.parentElement.classList.contains("hidden"), true);
+  await ui.run("chooseCreation('task')");
+  assert.equal(ui.node("#document-type-select").parentElement.parentElement.classList.contains("hidden"), true);
+});
+
+test("header context stays visible with collapsed navigation and follows edits and sections", async () => {
+  const ui = await setup({ sidebarHidden: true });
+  ui.notes[1].project = "alpha";
+  await ui.run("selectDocument('external-journal.md')");
+  assert.equal(ui.node("#context-project").textContent, "alpha");
+  assert.equal(ui.node("#context-kind").textContent, "Debug Journal");
+  ui.node("#document-project").value = "beta";
+  ui.node("#document-project").listeners.get("input")();
+  assert.equal(ui.node("#context-project").textContent, "beta");
+  ui.run("clearEditor()");
+  await ui.run("changeSection('analysis')");
+  assert.equal(ui.node("#context-kind").textContent, "Análisis");
+  assert.equal(ui.run("state.sidebarHidden"), true);
+});
+
+test("quick switcher searches across projects without opening hidden navigation", async () => {
+  const ui = await setup({ sidebarHidden: true });
+  ui.notes.push({ ...ui.notes[0], id: "analysis.md", title: "Auth evidence", kind: "analysis", project: "beta" });
+  await ui.run("loadCollections();");
+  await ui.run("changeProject('alpha')");
+  ui.documentListeners.get("keydown")({ key: "p", metaKey: true, preventDefault() {} });
+  assert.equal(ui.node("#document-switcher").classList.contains("hidden"), false);
+  assert.equal(ui.node("#app-shell").inert, true);
+  assert.equal(ui.node("#switcher-search").focused, true);
+  assert.equal(ui.run("state.sidebarHidden"), true);
+  ui.node("#switcher-search").value = "auth beta";
+  ui.node("#switcher-search").listeners.get("input")();
+  assert.equal(ui.node("#switcher-results").children.length, 1);
+  await ui.run("openQuickDocument()");
+  assert.equal(ui.run("state.selectedId"), "analysis.md");
+  assert.equal(ui.run("state.section"), "analysis");
+  assert.equal(ui.run("state.project"), "");
+  assert.equal(ui.node("#app-shell").inert, false);
+  assert.equal(ui.run("state.sidebarHidden"), true);
+});
+
+test("project map keeps a project's story together and creates related documents", async () => {
+  const ui = await setup();
+  ui.notes[0].id = "roadmap.md";
+  ui.notes[0].title = "Product roadmap";
+  ui.notes[0].kind = "roadmap";
+  ui.notes[0].project = "alpha";
+  ui.notes[1].id = "idea.md";
+  ui.notes[1].title = "Offline idea";
+  ui.notes[1].kind = "idea";
+  ui.notes[1].project = "alpha";
+  ui.notes[1].parent = "roadmap.md";
+  await ui.run("loadCollections()");
+  await ui.run("changeProject('alpha')");
+  assert.equal(ui.run("state.section"), "map");
+  assert.equal(ui.node("#project-map").classList.contains("hidden"), false);
+  assert.equal(ui.node("#project-map-nav").classList.contains("hidden"), false);
+  assert.equal(ui.node("#map-count").textContent, 2);
+  assert.equal(ui.node("#project-map-title").textContent, "alpha");
+  assert.equal(ui.node("#project-map-tree").querySelectorAll("button").length, 4);
+  ui.run("beginRelatedCreation('idea.md')");
+  assert.ok(ui.node("#create-context").textContent.includes("Offline idea"));
+  await ui.run("chooseCreation('analysis')");
+  assert.equal(ui.posts[0].project, "alpha");
+  assert.equal(ui.posts[0].parent, "idea.md");
+  assert.equal(ui.posts[0].kind, "analysis");
+});
+
+test("project map survives broken and circular external relationships", async () => {
+  const ui = await setup();
+  ui.notes.push({ ...ui.notes[0], id: "a.md", title: "A", project: "alpha", parent: "b.md" });
+  ui.notes.push({ ...ui.notes[0], id: "b.md", title: "B", project: "alpha", parent: "a.md" });
+  ui.notes.push({ ...ui.notes[0], id: "broken.md", title: "Broken", project: "alpha", parent: "missing.md" });
+  await ui.run("loadCollections()");
+  await ui.run("changeProject('alpha')");
+  assert.equal(ui.node("#project-map-tree").querySelectorAll("button").length, 6);
+  assert.equal(ui.run("state.section"), "map");
+});
+
+test("quick switcher keyboard navigation, focus trap and empty results are safe", async () => {
+  const ui = await setup();
+  const keydown = ui.documentListeners.get("keydown");
+  ui.run("openQuickSwitcher()");
+  keydown({ key: "ArrowDown", preventDefault() {} });
+  assert.equal(ui.run("state.switcherIndex"), 1);
+  keydown({ key: "ArrowDown", preventDefault() {} });
+  assert.equal(ui.run("state.switcherIndex"), 0);
+  ui.run("document.activeElement = document.querySelector('#switcher-close')");
+  keydown({ key: "Tab", preventDefault() {} });
+  assert.equal(ui.node("#switcher-search").focused, true);
+  ui.node("#switcher-search").value = "no matching notes";
+  ui.run("renderQuickSwitcher()");
+  await ui.run("openQuickDocument()");
+  assert.equal(ui.run("state.selectedId"), null);
+  keydown({ key: "Escape", preventDefault() {} });
+  assert.equal(ui.node("#document-switcher").classList.contains("hidden"), true);
+  assert.equal(ui.node("#app-shell").inert, false);
+  assert.equal(ui.node("#switcher-toggle").focused, true);
+  assert.equal(ui.posts.length, 0);
+});
+
+test("opening a different document starts at the top but external reloads preserve reading position", async () => {
+  const ui = await setup();
+  await ui.run("selectDocument('ordinary.md')");
+  ui.node("#markdown-preview").scrollTop = 240;
+  ui.run("showDocument(state.current, {view: 'preview'})");
+  assert.equal(ui.node("#markdown-preview").scrollTop, 240);
+  await ui.run("selectDocument('external-journal.md')");
+  assert.equal(ui.node("#markdown-preview").scrollTop, 0);
 });
 
 test("Markdown references allow same-folder documents but not arbitrary paths", async () => {

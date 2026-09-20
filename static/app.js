@@ -20,16 +20,59 @@ const state = {
   templates: [],
   outlineHidden: false,
   sidebarHidden: false,
+  switcherIndex: 0,
+  switcherItems: [],
+  switcherReturnFocus: null,
+  switchingDocument: false,
+  pendingParent: "",
 };
 
 function isWhiteboard(item) {
   return item?.type === "note" && item.kind === "whiteboard";
 }
 
+function nextTaskStatus(status) {
+  return status === "inbox" ? "todo" : status === "todo" ? "done" : "todo";
+}
+
+function taskStatusAction(status) {
+  return {
+    inbox: "Aceptar y mover a Pendientes",
+    todo: "Marcar como hecha",
+    done: "Reabrir en Pendientes",
+  }[status] || "Cambiar estado";
+}
+
+function sectionForDocument(item) {
+  return item.type === "task" ? "tasks" : item.kind === "analysis" ? "analysis" : "notes";
+}
+
+function documentTypeLabel(item) {
+  if (item.type === "task") return "Tarea";
+  if (isWhiteboard(item)) return "Pizarra";
+  return state.templates.find((template) => template.id === item.kind)?.label || (item.kind === "analysis" ? "Análisis" : item.kind || "Nota");
+}
+
 const elements = {
   shell: document.querySelector("#app-shell"),
   sidebar: document.querySelector("#notes-sidebar"),
   sidebarToggle: document.querySelector("#sidebar-toggle"),
+  contextProject: document.querySelector("#context-project"),
+  contextKind: document.querySelector("#context-kind"),
+  noteType: document.querySelector("#document-type-select"),
+  documentParent: document.querySelector("#document-parent"),
+  projectMapNav: document.querySelector("#project-map-nav"),
+  mapCount: document.querySelector("#map-count"),
+  projectMap: document.querySelector("#project-map"),
+  projectMapTitle: document.querySelector("#project-map-title"),
+  projectMapSummary: document.querySelector("#project-map-summary"),
+  projectMapTree: document.querySelector("#project-map-tree"),
+  projectMapCreate: document.querySelector("#project-map-create"),
+  switcher: document.querySelector("#document-switcher"),
+  switcherSearch: document.querySelector("#switcher-search"),
+  switcherResults: document.querySelector("#switcher-results"),
+  switcherClose: document.querySelector("#switcher-close"),
+  switcherToggle: document.querySelector("#switcher-toggle"),
   projectFilter: document.querySelector("#project-filter"),
   createMenu: document.querySelector("#create-menu"),
   createOptions: document.querySelector("#create-options"),
@@ -48,6 +91,7 @@ const elements = {
   sprintBoard: document.querySelector("#sprint-board"),
   sprintColumns: document.querySelector("#sprint-columns"),
   notesCount: document.querySelector("#notes-count"),
+  analysisCount: document.querySelector("#analysis-count"),
   inboxCount: document.querySelector("#inbox-count"),
   tasksCount: document.querySelector("#tasks-count"),
   taskFilters: document.querySelector("#task-filters"),
@@ -124,7 +168,7 @@ function persistConflictDraft() {
   try {
     localStorage.setItem(
       conflictDraftKey(state.selectedId),
-      JSON.stringify({ title: elements.title.value, body: elements.body.value, project: elements.documentProject.value, saved_at: new Date().toISOString() })
+      JSON.stringify({ ...editorDraft(), saved_at: new Date().toISOString() })
     );
   } catch {
     showToast("No se pudo conservar una copia local del borrador.");
@@ -153,12 +197,15 @@ function activateConflict(externalDocument, draft = null) {
     elements.title.value = draft.title;
     elements.body.value = draft.body;
     elements.documentProject.value = draft.project ?? externalDocument.project ?? "";
+    renderDocumentTypes(draft.kind ?? externalDocument.kind ?? "");
+    renderParentOptions(draft.parent ?? externalDocument.parent ?? "");
     resizeTitle();
   }
   persistConflictDraft();
   elements.conflictBanner.classList.remove("hidden");
   setSaveStatus("Conflicto pendiente");
   updateEditorStats();
+  updateWorkspaceContext();
 }
 
 function restoreConflictDraft(document) {
@@ -170,7 +217,7 @@ function restoreConflictDraft(document) {
 
 async function enterSaveConflict(documentId) {
   if (state.selectedId !== documentId || !state.current) return;
-  const draft = { title: elements.title.value, body: elements.body.value, project: elements.documentProject.value };
+  const draft = editorDraft();
   state.conflict = { external: state.current };
   persistConflictDraft();
   try {
@@ -191,12 +238,7 @@ async function keepLocalConflictVersion() {
   try {
     const updated = await api(`/api/documents/${encodeURIComponent(documentId)}`, {
       method: "PUT",
-      body: JSON.stringify({
-        title: elements.title.value.trim() || "Sin título",
-        body: elements.body.value,
-        project: elements.documentProject.value,
-        expected_revision: state.conflict.external.revision,
-      }),
+      body: JSON.stringify(documentUpdatePayload(state.conflict.external.revision)),
     });
     removeConflictDraft(documentId);
     state.conflict = null;
@@ -296,7 +338,9 @@ async function loadCollections({ preserveSelection = true } = {}) {
 }
 
 function sectionItems(section = state.section) {
-  const items = section === "notes" ? state.notes : state.tasks.filter((task) => task.status === state.taskFilter);
+  const items = section === "map" ? [...state.notes, ...state.tasks]
+    : section === "tasks" ? state.tasks.filter((task) => task.status === state.taskFilter)
+    : state.notes.filter((note) => sectionForDocument(note) === section);
   return items.filter(matchesProject);
 }
 
@@ -322,6 +366,199 @@ function renderProjects() {
   if (elements.projectFilter.value !== state.project) elements.projectFilter.value = state.project;
 }
 
+function renderDocumentTypes(kind = state.current?.kind || "") {
+  elements.noteType.replaceChildren();
+  const types = [{ id: "", label: "Nota" }, ...state.templates.filter((item) => item.type === "note")];
+  if (!types.some((item) => item.id === kind)) types.push({ id: kind, label: documentTypeLabel({ type: "note", kind }) });
+  for (const item of types) {
+    const option = document.createElement("option");
+    option.value = item.id; option.textContent = item.label;
+    elements.noteType.append(option);
+  }
+  elements.noteType.value = kind;
+}
+
+function renderParentOptions(parent = state.current?.parent || "") {
+  elements.documentParent.replaceChildren();
+  const root = document.createElement("option");
+  root.value = ""; root.textContent = "Raíz del proyecto";
+  elements.documentParent.append(root);
+  const project = elements.documentProject.value || state.current?.project || "";
+  const candidates = [...state.notes, ...state.tasks]
+    .filter((item) => item.id !== state.selectedId && item.project === project)
+    .sort((a, b) => a.title.localeCompare(b.title));
+  for (const item of candidates) {
+    const option = document.createElement("option");
+    option.value = item.id; option.textContent = `${item.title} · ${documentTypeLabel(item)}`;
+    elements.documentParent.append(option);
+  }
+  if (parent && !candidates.some((item) => item.id === parent)) {
+    const missing = document.createElement("option");
+    missing.value = parent; missing.textContent = `Referencia no encontrada · ${parent}`;
+    elements.documentParent.append(missing);
+  }
+  elements.documentParent.value = parent;
+}
+
+function projectDocuments() {
+  return [...state.notes, ...state.tasks].filter((item) => item.project === state.project);
+}
+
+function beginRelatedCreation(parent = "") {
+  state.pendingParent = parent;
+  if (state.sidebarHidden) setSidebarHidden(false);
+  if (!elements.createMenu.classList.contains("hidden")) closeCreateMenu();
+  toggleCreateMenu();
+}
+
+function createMapNode(item, byId, children, visited, path = new Set()) {
+  const li = document.createElement("li");
+  const row = document.createElement("div"); row.className = "map-node-row";
+  const open = document.createElement("button"); open.type = "button"; open.className = "map-node-open";
+  const title = document.createElement("strong"); title.textContent = item.title;
+  const type = document.createElement("span"); type.textContent = documentTypeLabel(item);
+  open.append(title, type); open.addEventListener("click", () => openDocumentFromSystem(item.id));
+  const add = document.createElement("button"); add.type = "button"; add.className = "map-node-add";
+  add.textContent = "+"; add.title = "Crear una rama desde este documento"; add.setAttribute("aria-label", `Crear documento relacionado con ${item.title}`);
+  add.addEventListener("click", () => beginRelatedCreation(item.id));
+  row.append(open, add); li.append(row); visited.add(item.id);
+
+  if (item.parent && !byId.has(item.parent)) {
+    const warning = document.createElement("span"); warning.className = "map-node-warning";
+    warning.textContent = `Referencia no encontrada: ${item.parent}`; li.append(warning);
+  }
+  const nextPath = new Set(path); nextPath.add(item.id);
+  const childItems = children.get(item.id) || [];
+  if (childItems.length) {
+    li.classList.add("has-children");
+    const list = document.createElement("ul");
+    for (const child of childItems) {
+      if (nextPath.has(child.id)) {
+        const cycle = document.createElement("li"); cycle.className = "map-node-warning";
+        cycle.textContent = `Relación circular con ${child.title}`; list.append(cycle); visited.add(child.id);
+      } else list.append(createMapNode(child, byId, children, visited, nextPath));
+    }
+    li.append(list);
+  }
+  return li;
+}
+
+function renderProjectMap() {
+  if (!state.project) return;
+  const items = projectDocuments();
+  elements.projectMapTitle.textContent = state.project;
+  const taskCount = items.filter((item) => item.type === "task").length;
+  elements.projectMapSummary.textContent = `${items.length} documentos · ${taskCount} ${taskCount === 1 ? "tarea" : "tareas"}`;
+  elements.projectMapTree.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement("p"); empty.className = "project-map-empty";
+    empty.textContent = "Este proyecto todavía no tiene documentos. Crea una idea, un roadmap o un análisis para empezar su historia.";
+    elements.projectMapTree.append(empty); return;
+  }
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const children = new Map();
+  for (const item of items) {
+    if (!item.parent || !byId.has(item.parent)) continue;
+    if (!children.has(item.parent)) children.set(item.parent, []);
+    children.get(item.parent).push(item);
+  }
+  const order = (a, b) => new Date(b.modified) - new Date(a.modified);
+  for (const values of children.values()) values.sort(order);
+  const roots = items.filter((item) => !item.parent || !byId.has(item.parent)).sort(order);
+  const flow = document.createElement("div"); flow.className = "project-tree-flow";
+  const projectRoot = document.createElement("div"); projectRoot.className = "map-project-root";
+  const projectTitle = document.createElement("strong"); projectTitle.textContent = state.project;
+  const projectType = document.createElement("span"); projectType.textContent = "Proyecto";
+  projectRoot.append(projectTitle, projectType);
+  const tree = document.createElement("ul"); tree.className = "project-tree";
+  const visited = new Set();
+  for (const root of roots) tree.append(createMapNode(root, byId, children, visited));
+  for (const item of [...items].sort(order)) {
+    if (!visited.has(item.id)) tree.append(createMapNode(item, byId, children, visited));
+  }
+  flow.append(projectRoot, tree);
+  elements.projectMapTree.append(flow);
+}
+
+function updateWorkspaceContext() {
+  const current = state.current;
+  const project = current ? (elements.documentProject.value || "Sin proyecto") : (state.project || "Todos los proyectos");
+  const item = current?.type === "note" && !isWhiteboard(current) ? { ...current, kind: elements.noteType.value } : current;
+  const kind = item ? documentTypeLabel(item) : { map: "Mapa", notes: "Notas", analysis: "Análisis", tasks: "Tareas" }[state.section];
+  elements.contextProject.textContent = project;
+  elements.contextProject.title = project;
+  elements.contextKind.textContent = kind;
+  elements.contextKind.title = kind;
+}
+
+function openQuickSwitcher() {
+  closeCreateMenu();
+  state.switcherReturnFocus = document.activeElement;
+  elements.switcherSearch.value = "";
+  elements.switcher.classList.remove("hidden");
+  elements.shell.inert = true;
+  renderQuickSwitcher();
+  elements.switcherSearch.focus();
+}
+
+function closeQuickSwitcher({ restoreFocus = true } = {}) {
+  elements.switcher.classList.add("hidden");
+  elements.shell.inert = false;
+  if (restoreFocus) {
+    const target = state.switcherReturnFocus?.isConnected ? state.switcherReturnFocus : elements.switcherToggle;
+    target.focus();
+  }
+}
+
+function renderQuickSwitcher() {
+  const terms = elements.switcherSearch.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  state.switcherItems = [...state.notes, ...state.tasks]
+    .filter((item) => terms.every((term) => `${item.title} ${item.project || ""} ${item.source || ""} ${documentTypeLabel(item)}`.toLocaleLowerCase().includes(term)))
+    .sort((a, b) => new Date(b.modified) - new Date(a.modified)).slice(0, 50);
+  state.switcherIndex = 0;
+  elements.switcherResults.replaceChildren();
+  if (!state.switcherItems.length) {
+    const empty = document.createElement("p"); empty.className = "switcher-empty";
+    empty.textContent = "No hay documentos con ese título o proyecto.";
+    elements.switcherResults.append(empty);
+  }
+  state.switcherItems.forEach((item, index) => {
+    const button = document.createElement("button"); button.type = "button";
+    const title = document.createElement("strong"); title.textContent = item.title;
+    const detail = document.createElement("span"); detail.textContent = `${item.project || "Sin proyecto"} · ${documentTypeLabel(item)}`;
+    button.append(title, detail);
+    button.addEventListener("click", () => openQuickDocument(item.id));
+    button.addEventListener("focus", () => setQuickSwitcherIndex(index, { scroll: false }));
+    elements.switcherResults.append(button);
+  });
+  setQuickSwitcherIndex(0, { scroll: false });
+}
+
+function setQuickSwitcherIndex(index, { scroll = true } = {}) {
+  const buttons = [...elements.switcherResults.querySelectorAll("button")];
+  if (!buttons.length) return;
+  state.switcherIndex = (index + buttons.length) % buttons.length;
+  buttons.forEach((button, i) => {
+    button.classList.toggle("active", i === state.switcherIndex);
+    if (i === state.switcherIndex) button.setAttribute("aria-current", "true");
+    else button.removeAttribute("aria-current");
+  });
+  if (scroll) buttons[state.switcherIndex].scrollIntoView({ block: "nearest" });
+}
+
+async function openQuickDocument(id = state.switcherItems[state.switcherIndex]?.id) {
+  if (!id || state.switchingDocument) return;
+  state.switchingDocument = true;
+  closeQuickSwitcher({ restoreFocus: false });
+  try {
+    await openDocumentFromSystem(id);
+    if (state.selectedId) {
+      if (isWhiteboard(state.current)) drawing.svg.focus();
+      else elements.preview.focus({ preventScroll: true });
+    }
+  } finally { state.switchingDocument = false; }
+}
+
 async function loadTemplates() {
   try {
     state.templates = await api("/api/templates");
@@ -335,9 +572,9 @@ async function loadTemplates() {
 function renderCreateOptions() {
   elements.createOptions.replaceChildren();
   const groups = [
-    ["Documentos", [{ id: "note", label: "Nota" }, { id: "whiteboard", label: "Pizarra" }]],
+    ["Documentos", [{ id: "note", label: "Nota" }, ...state.templates.filter((item) => item.id === "analysis"), { id: "whiteboard", label: "Pizarra" }]],
     ["Tareas", [{ id: "task", label: "Tarea" }, ...state.templates.filter((item) => item.type === "task")]],
-    ["Plantillas", state.templates.filter((item) => item.type === "note")],
+    ["Plantillas", state.templates.filter((item) => item.type === "note" && item.id !== "analysis")],
   ];
   for (const [label, items] of groups) {
     if (!items.length) continue;
@@ -365,7 +602,8 @@ function toggleCreateMenu() {
   if (state.creating) return;
   if (!elements.createMenu.classList.contains("hidden")) return closeCreateMenu({ focus: true });
   if (!elements.createOptions.children.length) renderCreateOptions();
-  elements.createContext.textContent = state.project ? `Proyecto: ${state.project}` : "Sin proyecto · archivos locales";
+  const parent = [...state.notes, ...state.tasks].find((item) => item.id === state.pendingParent);
+  elements.createContext.textContent = parent ? `Dentro de: ${parent.title}` : state.project ? `Proyecto: ${state.project}` : "Sin proyecto · archivos locales";
   elements.createMenu.classList.remove("hidden");
   elements.newItem.setAttribute("aria-expanded", "true");
   elements.createOptions.querySelectorAll("button")[0]?.focus();
@@ -380,7 +618,7 @@ async function chooseCreation(kind) {
     else if (kind === "task") await createTask("todo");
     else if (kind === "whiteboard") await createWhiteboard();
     else await createFromTemplate(kind);
-  } finally { state.creating = false; elements.newItem.disabled = false; }
+  } finally { state.pendingParent = ""; state.creating = false; elements.newItem.disabled = false; }
 }
 
 async function setTaskFilter(status) {
@@ -394,7 +632,8 @@ async function changeProject(project) {
   await flushSave();
   closeCreateMenu();
   state.project = project;
-  if (state.current && !matchesProject(state.current)) clearEditor();
+  state.section = project ? "map" : state.section === "map" ? "notes" : state.section;
+  clearEditor();
   renderNavigation();
   renderList();
   renderSprintBoard();
@@ -413,7 +652,11 @@ function isSprintView() {
 }
 
 function renderNavigation() {
+  const projectItems = projectDocuments();
+  elements.projectMapNav.classList.toggle("hidden", !state.project);
+  elements.mapCount.textContent = projectItems.length;
   elements.notesCount.textContent = sectionItems("notes").length;
+  elements.analysisCount.textContent = sectionItems("analysis").length;
   elements.tasksCount.textContent = state.tasks.filter(matchesProject).length;
   for (const status of ["inbox", "todo", "done"]) {
     elements[`${status}Count`].textContent = state.tasks.filter((task) => task.status === status && matchesProject(task)).length;
@@ -427,7 +670,7 @@ function renderNavigation() {
     if (active) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
-  elements.listHeading.textContent = state.section === "notes" ? "RECIENTES" : isSprintView() ? "TODAS LAS TAREAS" : { inbox: "POR REVISAR", todo: "PENDIENTES", done: "COMPLETADAS" }[state.taskFilter];
+  elements.listHeading.textContent = state.section === "map" ? "EN ESTE PROYECTO" : state.section !== "tasks" ? "RECIENTES" : isSprintView() ? "TODAS LAS TAREAS" : { inbox: "POR REVISAR", todo: "PENDIENTES", done: "COMPLETADAS" }[state.taskFilter];
   elements.taskViewToggle.classList.toggle("hidden", state.section !== "tasks");
   elements.taskViewToggle.querySelectorAll("button").forEach((button) => {
     const active = button.dataset.taskLayout === state.taskLayout;
@@ -436,6 +679,7 @@ function renderNavigation() {
   });
   elements.newItem.lastElementChild.textContent = "Crear";
   elements.newItem.title = "Crear documento o tarea (⌘N)";
+  updateWorkspaceContext();
 }
 
 function renderList() {
@@ -447,53 +691,77 @@ function renderList() {
     message.className = "list-message";
     message.textContent = query
       ? "No encontramos nada con ese texto."
-      : state.section === "notes" ? "Todavía no hay documentos."
+      : state.section === "map" ? "Este proyecto todavía no tiene documentos." : state.section === "analysis" ? "Todavía no hay análisis." : state.section === "notes" ? "Todavía no hay notas."
         : { inbox: "Inbox está limpio.", todo: "No hay tareas pendientes.", done: "Todavía no hay tareas completadas." }[state.taskFilter];
     elements.list.append(message);
     return;
   }
 
   for (const item of items) {
-    const button = document.createElement("button");
-    button.className = `note-card${item.id === state.selectedId ? " active" : ""}${item.status === "done" ? " done" : ""}`;
-    button.type = "button";
+    const card = document.createElement(item.type === "task" ? "div" : "button");
+    card.className = `note-card${item.type === "task" ? " task-list-card" : ""}${item.id === state.selectedId ? " active" : ""}${item.status === "done" ? " done" : ""}`;
+    let content = card;
+
+    if (item.type === "task") {
+      const mark = document.createElement("button");
+      mark.className = "task-mark";
+      mark.type = "button";
+      mark.textContent = item.status === "done" ? "✓" : "";
+      mark.title = taskStatusAction(item.status);
+      mark.setAttribute("aria-label", `${taskStatusAction(item.status)}: ${item.title}`);
+      mark.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        mark.disabled = true;
+        try {
+          await moveTaskToStatus(item.id, nextTaskStatus(item.status));
+        } finally {
+          mark.disabled = false;
+        }
+      });
+
+      content = document.createElement("button");
+      content.className = "task-card-open";
+      content.type = "button";
+      content.setAttribute("aria-label", `Abrir tarea: ${item.title}`);
+      content.addEventListener("click", () => selectDocument(item.id));
+      card.append(mark, content);
+    } else {
+      card.type = "button";
+      card.addEventListener("click", () => selectDocument(item.id));
+    }
 
     const top = document.createElement("span");
     top.className = "note-card-top";
     const title = document.createElement("strong");
-    if (item.type === "task") {
-      const mark = document.createElement("i");
-      mark.className = "task-mark";
-      mark.textContent = item.status === "done" ? "✓" : "";
-      title.append(mark, document.createTextNode(item.title));
-    } else {
-      title.textContent = item.title;
-    }
+    title.textContent = item.title;
     const time = document.createElement("time");
     time.dateTime = item.modified;
     time.textContent = item.type === "task" ? formatRelativeDate(item.modified) : formatCompactDate(item.modified);
     top.append(title, time);
-    button.append(top);
+    content.append(top);
 
     if (item.type === "task") {
       const context = document.createElement("span");
       context.className = "task-card-context";
       context.textContent = [item.project, item.source].filter(Boolean).map(capitalize).join(" · ") || "Sin proyecto";
-      button.append(context);
+      content.append(context);
     } else {
       const preview = document.createElement("span");
       preview.className = "note-preview";
       preview.textContent = isWhiteboard(item) ? (item.project || "Dibujo local · Markdown") : item.preview || "Nota vacía";
-      button.append(preview);
+      content.append(preview);
       const kind = document.createElement("span");
       kind.className = "document-type";
       kind.textContent = isWhiteboard(item) ? "Pizarra" : state.templates.find((template) => template.id === item.kind)?.label || item.kind || "Nota";
-      button.append(kind);
+      content.append(kind);
     }
-    button.addEventListener("click", () => selectDocument(item.id));
-    elements.list.append(button);
+    elements.list.append(card);
   }
 }
+
+let sprintDraggedTaskId = "";
+let suppressSprintClickUntil = 0;
 
 function renderSprintBoard() {
   const columns = [
@@ -507,6 +775,24 @@ function renderSprintBoard() {
     const tasks = state.tasks.filter((task) => task.status === definition.status && matchesSearch(task));
     const column = document.createElement("section");
     column.className = `sprint-column sprint-${definition.status}`;
+    column.dataset.taskStatus = definition.status;
+    column.addEventListener("dragover", (event) => {
+      if (!sprintDraggedTaskId) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      column.classList.add("drop-target");
+    });
+    column.addEventListener("dragleave", (event) => {
+      if (!event.relatedTarget || !column.contains(event.relatedTarget)) column.classList.remove("drop-target");
+    });
+    column.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      column.classList.remove("drop-target");
+      const taskId = sprintDraggedTaskId || event.dataTransfer?.getData("text/plain") || "";
+      sprintDraggedTaskId = "";
+      suppressSprintClickUntil = Date.now() + 250;
+      if (taskId) await moveTaskToStatus(taskId, definition.status);
+    });
 
     const header = document.createElement("header");
     const heading = document.createElement("div");
@@ -534,6 +820,9 @@ function renderSprintBoard() {
       const card = document.createElement("button");
       card.className = `sprint-card${task.status === "done" ? " done" : ""}`;
       card.type = "button";
+      card.draggable = true;
+      card.setAttribute("draggable", "true");
+      card.setAttribute("aria-label", `Abrir tarea: ${task.title}. Arrástrala para cambiar su estado.`);
 
       const cardTitle = document.createElement("strong");
       cardTitle.textContent = task.title;
@@ -543,7 +832,23 @@ function renderSprintBoard() {
       time.dateTime = task.modified;
       time.textContent = formatRelativeDate(task.modified);
       card.append(cardTitle, context, time);
-      card.addEventListener("click", () => openTaskFromSprint(task.id));
+      card.addEventListener("dragstart", (event) => {
+        sprintDraggedTaskId = task.id;
+        card.classList.add("dragging");
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", task.id);
+        }
+      });
+      card.addEventListener("dragend", () => {
+        card.classList.remove("dragging");
+        sprintDraggedTaskId = "";
+        suppressSprintClickUntil = Date.now() + 250;
+      });
+      card.addEventListener("click", () => {
+        if (Date.now() < suppressSprintClickUntil) return;
+        openTaskFromSprint(task.id);
+      });
       taskList.append(card);
     }
 
@@ -554,8 +859,14 @@ function renderSprintBoard() {
 
 function updateWorkspaceMode() {
   const sprint = isSprintView();
+  const map = state.section === "map" && Boolean(state.project);
   elements.sprintBoard.classList.toggle("hidden", !sprint);
-  if (sprint) {
+  elements.projectMap.classList.toggle("hidden", !map);
+  if (map) {
+    elements.empty.classList.add("hidden");
+    elements.editor.classList.add("hidden");
+    renderProjectMap();
+  } else if (sprint) {
     elements.empty.classList.add("hidden");
     elements.editor.classList.add("hidden");
   } else if (state.selectedId) {
@@ -585,6 +896,31 @@ async function openTaskFromSprint(documentId) {
   await selectDocument(documentId, { view: "preview" });
 }
 
+async function moveTaskToStatus(documentId, status) {
+  if (!["inbox", "todo", "done"].includes(status)) return null;
+  if (state.current?.id === documentId) await flushSave();
+  const task = state.current?.id === documentId
+    ? state.current
+    : state.tasks.find((candidate) => candidate.id === documentId);
+  if (!task || task.type !== "task" || task.status === status) return task || null;
+
+  try {
+    const updated = await api(`/api/tasks/${encodeURIComponent(documentId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, expected_revision: task.revision }),
+    });
+    if (state.selectedId === documentId) clearEditor();
+    await loadCollections();
+    showToast({ inbox: "Tarea movida a Inbox", todo: "Tarea movida a Pendientes", done: "Tarea completada" }[status]);
+    return updated;
+  } catch (error) {
+    if (error.status === 409 && state.current?.id === documentId) await enterSaveConflict(documentId);
+    else if (error.status === 409) await loadCollections();
+    showToast(error.message);
+    return null;
+  }
+}
+
 async function selectDocument(documentId, { view = "preview", focus = false } = {}) {
   if (state.loadingDocument || documentId === state.selectedId) return;
   await flushSave();
@@ -605,7 +941,7 @@ async function openDocumentFromSystem(documentId) {
   try {
     const document = await api(`/api/documents/${encodeURIComponent(documentId)}`);
     if (!matchesProject(document)) state.project = "";
-    state.section = document.type === "task" ? "tasks" : "notes";
+    state.section = sectionForDocument(document);
     if (document.type === "task") state.taskFilter = document.status;
     showDocument(document, { view: "preview" });
     await loadCollections();
@@ -615,10 +951,11 @@ async function openDocumentFromSystem(documentId) {
 }
 
 function showDocument(document, { focus = false, view = state.view } = {}) {
+  const changedDocument = state.selectedId !== document.id;
   drawing.cancel();
   if (state.taskLayout === "sprint") state.taskLayout = "list";
   state.current = document;
-  state.section = document.type === "task" ? "tasks" : "notes";
+  state.section = sectionForDocument(document);
   if (document.type === "task") state.taskFilter = document.status;
   state.selectedId = document.id;
   state.conflict = null;
@@ -626,6 +963,8 @@ function showDocument(document, { focus = false, view = state.view } = {}) {
   elements.title.value = document.title;
   elements.body.value = document.body;
   elements.documentProject.value = document.project || "";
+  renderDocumentTypes(document.kind || "");
+  renderParentOptions(document.parent || "");
   if (!restoreConflictDraft(document)) setSaveStatus("Todo guardado");
   setView(view, { focus: false });
   updateEditorStats();
@@ -634,7 +973,12 @@ function showDocument(document, { focus = false, view = state.view } = {}) {
   renderNavigation();
   renderList();
   updateWorkspaceMode();
+  if (changedDocument) {
+    elements.preview.scrollTop = 0;
+    elements.body.scrollTop = 0;
+  }
   resizeTitle();
+  updateOutlineActive();
   if (focus) elements.title.focus();
 }
 
@@ -651,6 +995,7 @@ async function createNote(kind = "") {
         body: template?.body || "",
         kind,
         project: state.project,
+        parent: state.pendingParent,
       }),
     });
     state.section = "notes";
@@ -667,7 +1012,7 @@ async function createTask(status = "todo", template = null) {
   try {
     const task = await api("/api/tasks", {
       method: "POST",
-      body: JSON.stringify({ title: template?.title || "Nueva tarea", body: template?.body || "", status, project: state.project, source: "" }),
+      body: JSON.stringify({ title: template?.title || "Nueva tarea", body: template?.body || "", status, project: state.project, source: "", parent: state.pendingParent }),
     });
     state.section = "tasks"; state.taskFilter = status;
     await loadCollections();
@@ -683,7 +1028,7 @@ async function createWhiteboard() {
   try {
     const note = await api("/api/notes", {
       method: "POST",
-      body: JSON.stringify({ title: "Nueva pizarra", body: PlainJotWhiteboard.serialize(PlainJotWhiteboard.empty()), kind: "whiteboard", project: state.project }),
+      body: JSON.stringify({ title: "Nueva pizarra", body: PlainJotWhiteboard.serialize(PlainJotWhiteboard.empty()), kind: "whiteboard", project: state.project, parent: state.pendingParent }),
     });
     state.section = "notes";
     await loadCollections();
@@ -711,6 +1056,7 @@ async function exportWhiteboard() {
 }
 
 function createForCurrentSection() {
+  state.pendingParent = "";
   toggleCreateMenu();
 }
 
@@ -735,6 +1081,17 @@ function scheduleSave() {
   state.saveTimer = setTimeout(saveCurrent, 650);
 }
 
+function editorDraft() {
+  return { title: elements.title.value, body: elements.body.value, project: elements.documentProject.value, parent: elements.documentParent.value, kind: elements.noteType.value };
+}
+
+function documentUpdatePayload(revision) {
+  const { kind, parent, ...draft } = editorDraft();
+  return { ...draft, title: draft.title.trim() || "Sin título", expected_revision: revision,
+    ...(parent !== (state.current?.parent || "") ? { parent } : {}),
+    ...(state.current?.type === "note" && !isWhiteboard(state.current) && kind !== (state.current.kind || "") ? { kind } : {}) };
+}
+
 async function saveCurrent() {
   clearTimeout(state.saveTimer);
   state.saveTimer = null;
@@ -749,15 +1106,12 @@ async function saveCurrent() {
   try {
     const updated = await api(`/api/documents/${encodeURIComponent(documentId)}`, {
       method: "PUT",
-      body: JSON.stringify({
-        title: elements.title.value.trim() || "Sin título",
-        body: elements.body.value,
-        project: elements.documentProject.value,
-        expected_revision: state.current.revision,
-      }),
+      body: JSON.stringify(documentUpdatePayload(state.current.revision)),
     });
     if (state.selectedId === documentId) {
       state.current = updated;
+      state.section = sectionForDocument(updated);
+      updateTaskControls();
       setSaveStatus("Todo guardado");
     }
     await loadCollections();
@@ -783,7 +1137,7 @@ async function transitionTask() {
   if (!state.current || state.current.type !== "task") return;
   await flushSave();
   if (!state.current || state.current.type !== "task") return;
-  const nextStatus = state.current.status === "inbox" ? "todo" : state.current.status === "todo" ? "done" : "todo";
+  const nextStatus = nextTaskStatus(state.current.status);
   try {
     const updated = await api(`/api/tasks/${encodeURIComponent(state.current.id)}`, {
       method: "PATCH",
@@ -837,6 +1191,7 @@ function clearEditor() {
   elements.title.style.height = "";
   elements.title.style.overflowY = "";
   elements.body.value = "";
+  updateWorkspaceContext();
   renderDocumentOutline();
   setSaveStatus("Todo guardado");
   updateEmptyState();
@@ -845,7 +1200,7 @@ function clearEditor() {
 }
 
 async function changeSection(section) {
-  if (!["notes", "tasks"].includes(section)) return;
+  if (!["map", "notes", "analysis", "tasks"].includes(section) || (section === "map" && !state.project)) return;
   if (section === state.section) return;
   await flushSave();
   closeCreateMenu();
@@ -859,8 +1214,10 @@ async function changeSection(section) {
 }
 
 function updateEmptyState() {
-  const content = state.section === "notes"
-    ? ["DOCUMENTOS", "Tu trabajo, en un solo lugar.", "Notas, journals, roadmaps y pizarras. Abre un documento o pulsa + Crear para empezar.", "＋ Crear"]
+  const content = state.section === "analysis"
+    ? ["ANÁLISIS", "Entiende antes de cambiar.", "Investigaciones, hallazgos y recomendaciones, separados de tus notas. Pulsa + Crear y elige Análisis.", "＋ Crear"]
+    : state.section === "notes"
+    ? ["NOTAS", "Una libreta para tu trabajo.", "Journals, roadmaps, decisiones y pizarras. Abre una nota o pulsa + Crear para empezar.", "＋ Crear"]
     : state.taskFilter === "inbox"
       ? ["INBOX", "Propuestas por revisar.", "Aquí llegan las tareas de tus agentes. Acéptalas para pasarlas a Pendientes.", "＋ Crear"]
       : state.taskFilter === "done"
@@ -873,8 +1230,7 @@ function updateTaskControls() {
   const isTask = state.current?.type === "task";
   elements.taskAction.classList.toggle("hidden", !isTask);
   elements.taskContext.classList.toggle("hidden", !isTask);
-  const template = state.templates.find((item) => item.id === state.current?.kind);
-  elements.documentKind.textContent = isWhiteboard(state.current) ? "Whiteboard · Markdown" : isTask ? "Markdown task" : template ? `${template.label} · Markdown` : "Markdown note";
+  elements.documentKind.textContent = `${state.current ? documentTypeLabel(state.current) : "Nota"} · Markdown`;
   if (!isTask) return;
   const labels = { inbox: "Aceptar tarea", todo: "Completar", done: "Reabrir" };
   elements.taskAction.textContent = labels[state.current.status] || "Mover a Tasks";
@@ -882,6 +1238,7 @@ function updateTaskControls() {
   const values = [
     state.current.source && `Fuente: ${state.current.source}`,
     `Estado: ${state.current.status}`,
+    state.current.parent && `Depende de: ${state.current.parent}`,
   ].filter(Boolean);
   for (const value of values) {
     const span = document.createElement("span");
@@ -912,6 +1269,8 @@ function setView(view, { focus = true } = {}) {
   elements.title.classList.toggle("hidden", isPreview && !board);
   elements.titleHeading.classList.toggle("hidden", isPreview && !board);
   elements.documentProject.parentElement.classList.toggle("hidden", isPreview);
+  elements.documentParent.parentElement.classList.toggle("hidden", isPreview || !elements.documentProject.value);
+  elements.noteType.parentElement.parentElement.classList.toggle("hidden", isPreview || board || state.current?.type === "task");
   elements.preview.classList.toggle("hidden", !isPreview || board);
   resizeTitle();
   if (isPreview) {
@@ -1309,7 +1668,18 @@ document.addEventListener("click", (event) => {
 elements.taskFilters.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => setTaskFilter(button.dataset.taskFilter)));
 elements.folder.addEventListener("click", chooseNotesFolder);
 elements.projectFilter.addEventListener("change", () => changeProject(elements.projectFilter.value));
-elements.documentProject.addEventListener("input", scheduleSave);
+elements.documentProject.addEventListener("input", () => {
+  renderParentOptions(elements.documentParent.value);
+  elements.documentParent.parentElement.classList.toggle("hidden", !elements.documentProject.value);
+  updateWorkspaceContext(); scheduleSave();
+});
+elements.documentParent.addEventListener("change", scheduleSave);
+elements.noteType.addEventListener("change", () => { updateWorkspaceContext(); scheduleSave(); });
+elements.switcherToggle.addEventListener("click", openQuickSwitcher);
+elements.switcherClose.addEventListener("click", () => closeQuickSwitcher());
+elements.switcherSearch.addEventListener("input", renderQuickSwitcher);
+elements.switcher.addEventListener("click", (event) => { if (event.target === elements.switcher) closeQuickSwitcher(); });
+elements.projectMapCreate.addEventListener("click", () => beginRelatedCreation());
 elements.preview.addEventListener("click", (event) => {
   const link = event.target.closest("a[data-document-id]");
   if (!link) return;
@@ -1352,10 +1722,28 @@ elements.taskViewToggle.querySelectorAll("button").forEach((button) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  const modifier = event.metaKey || event.ctrlKey;
+  if (modifier && event.key.toLowerCase() === "p" && !event.shiftKey) {
+    event.preventDefault();
+    if (elements.switcher.classList.contains("hidden")) openQuickSwitcher();
+    else closeQuickSwitcher();
+    return;
+  }
+  if (!elements.switcher.classList.contains("hidden")) {
+    if (event.key === "Escape") { event.preventDefault(); closeQuickSwitcher(); }
+    else if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setQuickSwitcherIndex(state.switcherIndex + (event.key === "ArrowDown" ? 1 : -1)); }
+    else if (event.key === "Enter" && event.target !== elements.switcherClose) { event.preventDefault(); openQuickDocument(); }
+    else if (event.key === "Tab") {
+      event.preventDefault();
+      const controls = [elements.switcherSearch, ...elements.switcherResults.querySelectorAll("button"), elements.switcherClose];
+      const index = controls.indexOf(document.activeElement);
+      controls[(index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length].focus();
+    }
+    return;
+  }
   if (event.key === "Escape" && !elements.createMenu.classList.contains("hidden")) {
     event.preventDefault(); closeCreateMenu({ focus: true }); return;
   }
-  const modifier = event.metaKey || event.ctrlKey;
   if (modifier && event.shiftKey && event.key.toLowerCase() === "n") {
     event.preventDefault();
     createTask();

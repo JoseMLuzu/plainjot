@@ -51,8 +51,14 @@
         </div>
 
         <nav class="section-nav" aria-label="Secciones principales">
+          <button id="project-map-nav" class="section-button hidden" type="button" data-section="map">
+            <span>Mapa</span><span id="map-count" class="note-count">0</span>
+          </button>
           <button class="section-button active" type="button" data-section="notes" aria-current="page">
-            <span>Documentos</span><span id="notes-count" class="note-count">0</span>
+            <span>Notas</span><span id="notes-count" class="note-count">0</span>
+          </button>
+          <button class="section-button" type="button" data-section="analysis">
+            <span>Análisis</span><span id="analysis-count" class="note-count">0</span>
           </button>
           <button class="section-button" type="button" data-section="tasks">
             <span>Tareas</span><span id="tasks-count" class="note-count">0</span>
@@ -88,12 +94,17 @@
             <button id="sidebar-toggle" class="toolbar-icon" type="button" title="Ocultar barra lateral" aria-label="Ocultar barra lateral" aria-controls="notes-sidebar" aria-expanded="true">
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
             </button>
-            <div class="sync-state">
-              <span class="sync-dot"></span>
-              <span id="save-status">Todo guardado</span>
-            </div>
+            <nav class="workspace-context" aria-label="Contexto del documento">
+              <span class="context-brand">PlainJot</span><span class="context-divider" aria-hidden="true">/</span>
+              <span id="context-project" class="context-project">Todos los proyectos</span><span class="context-divider" aria-hidden="true">/</span>
+              <span id="context-kind" class="context-kind">Notas</span>
+            </nav>
           </div>
           <div class="global-actions">
+            <div class="sync-state"><span class="sync-dot"></span><span id="save-status">Todo guardado</span></div>
+            <button id="switcher-toggle" class="toolbar-icon" type="button" title="Cambiar documento (⌘P)" aria-label="Cambiar documento (⌘P)" aria-controls="document-switcher">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
+            </button>
             <button id="theme-toggle" class="toolbar-icon" type="button" title="Cambiar tema" aria-label="Cambiar tema">
               <span class="theme-light" aria-hidden="true">☼</span>
               <span class="theme-dark" aria-hidden="true">☾</span>
@@ -105,9 +116,21 @@
           <header class="sprint-header">
             <p>SPRINT VIEW</p>
             <h2 id="sprint-title">Trabajo actual</h2>
-            <span>Las mismas tareas Markdown, ordenadas por estado.</span>
+            <span>Arrastra las tareas entre Inbox, Por hacer y Hecho. El estado se guarda en el mismo archivo Markdown.</span>
           </header>
           <div id="sprint-columns" class="sprint-columns"></div>
+        </section>
+
+        <section id="project-map" class="project-map hidden" aria-labelledby="project-map-title">
+          <header class="project-map-header">
+            <div>
+              <p>MAPA DE CONTEXTO</p>
+              <h2 id="project-map-title">Proyecto</h2>
+              <span id="project-map-summary"></span>
+            </div>
+            <button id="project-map-create" class="primary-button" type="button">＋ Crear raíz</button>
+          </header>
+          <div id="project-map-tree" class="project-map-tree"></div>
         </section>
 
         <div id="empty-state" class="empty-state">
@@ -115,9 +138,9 @@
             <span class="paper paper-back"></span>
             <span class="paper paper-front"><i></i><i></i><i></i></span>
           </div>
-          <p id="empty-kicker" class="empty-kicker">DOCUMENTOS</p>
-          <h2 id="empty-title">Tu trabajo, en un solo lugar.</h2>
-          <p id="empty-copy" class="empty-copy">Notas, journals, roadmaps y pizarras. Abre un documento o pulsa + Crear para empezar.</p>
+          <p id="empty-kicker" class="empty-kicker">NOTAS</p>
+          <h2 id="empty-title">Una libreta para tu trabajo.</h2>
+          <p id="empty-copy" class="empty-copy">Journals, roadmaps, decisiones y pizarras. Abre una nota o pulsa + Crear para empezar.</p>
           <button id="empty-new-item" class="primary-button" type="button">＋ Crear</button>
           <span class="shortcut-hint">Presiona <kbd>⌘ N</kbd> en cualquier momento</span>
         </div>
@@ -159,8 +182,16 @@
               <span>Proyecto</span>
               <input id="document-project" type="text" maxlength="200" placeholder="Sin proyecto" aria-label="Proyecto del documento" />
             </label>
+            <label class="document-type-control hidden">
+              <span>Tipo</span>
+              <span class="select-shell"><select id="document-type-select" aria-label="Tipo de nota"></select><svg class="select-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg></span>
+            </label>
+            <label class="document-parent hidden">
+              <span>Depende de</span>
+              <span class="select-shell"><select id="document-parent" aria-label="Documento padre en el mapa del proyecto"><option value="">Raíz del proyecto</option></select><svg class="select-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg></span>
+            </label>
             <textarea id="note-body" class="body-input" placeholder="Empieza a escribir…" spellcheck="true" aria-label="Contenido de la nota"></textarea>
-            <article id="markdown-preview" class="markdown-preview hidden" aria-label="Vista previa de la nota"></article>
+            <article id="markdown-preview" class="markdown-preview hidden" tabindex="-1" aria-label="Vista previa de la nota"></article>
             <section id="whiteboard-panel" class="whiteboard-panel hidden" aria-label="Pizarra">
               <div class="drawing-toolbar" role="group" aria-label="Herramientas de dibujo">
                 <div class="drawing-tools" role="group" aria-label="Herramienta">
@@ -211,6 +242,14 @@
     </main>
 
     <div id="toast" class="toast" role="status"></div>
+    <section id="document-switcher" class="document-switcher hidden" role="dialog" aria-modal="true" aria-labelledby="switcher-title">
+      <div class="switcher-panel">
+        <header><h2 id="switcher-title">Cambiar documento</h2><button id="switcher-close" class="toolbar-icon" type="button" aria-label="Cerrar buscador de documentos">×</button></header>
+        <input id="switcher-search" type="search" placeholder="Buscar por título o proyecto…" aria-label="Buscar documento" aria-controls="switcher-results" autocomplete="off" />
+        <div id="switcher-results" class="switcher-results" role="group" aria-label="Documentos encontrados"></div>
+        <p class="switcher-hint">↑ ↓ para elegir · Enter para abrir · Esc para cerrar</p>
+      </div>
+    </section>
     <script src="whiteboard.js" defer></script>
     <script src="app.js" defer></script>
   </body>
