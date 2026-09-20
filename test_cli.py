@@ -91,6 +91,27 @@ class PlainJotCLITests(unittest.TestCase):
         self.assertIn(journal_id, self.run_cli("list").stdout)
         self.assertIn(journal_id, self.run_cli("search", "state update").stdout)
 
+    def test_agent_can_create_and_list_analyses_in_the_same_folder(self):
+        analysis_id = self.run_cli("add", "Login analysis", "--kind", "analysis", "--project", "alpha", "--source", "codex").stdout.strip()
+        other_id = self.run_cli("add", "Ordinary note").stdout.strip()
+        doc = PlainJotStore(self.notes_dir).get_document(analysis_id)
+        self.assertEqual(doc["kind"], "analysis")
+        self.assertIn("## Hallazgos", doc["body"])
+        listing = self.run_cli("list", "--analyses", "--project", "alpha").stdout
+        self.assertIn(analysis_id, listing)
+        self.assertNotIn(other_id, listing)
+
+    def test_agent_can_build_project_relationships(self):
+        root = self.run_cli("add", "Roadmap", "--kind", "roadmap", "--project", "alpha").stdout.strip()
+        idea = self.run_cli("add", "Offline idea", "--kind", "idea", "--project", "alpha", "--parent", root).stdout.strip()
+        task = self.run_cli("task", "Prototype offline mode", "--project", "alpha", "--parent", idea).stdout.strip()
+        store = PlainJotStore(self.notes_dir)
+        self.assertEqual(store.get_document(idea)["parent"], root)
+        self.assertEqual(store.get_document(task)["parent"], idea)
+        invalid = self.run_cli("add", "Unsafe", "--parent", "../outside.md", check=False)
+        self.assertEqual(invalid.returncode, 1)
+        self.assertFalse((self.notes_dir.parent / "outside.md").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

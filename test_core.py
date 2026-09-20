@@ -36,14 +36,31 @@ class PlainJotCoreTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_developer_notes_share_project_source_and_search(self):
-        for kind in ("", "debug-journal", "roadmap", "decision", "refactor", "review", "handoff"):
+        for kind in ("", "idea", "debug-journal", "roadmap", "decision", "refactor", "review", "handoff"):
             note = self.store.create_note("Developer note", "Context", kind=kind, project="My project: one", source="claude-code")
             self.assertEqual(note["project"], "My project: one")
             self.assertEqual(note["source"], "claude-code")
             self.assertEqual(note["status"], "")
             metadata, _, _ = parse_frontmatter((self.root / note["id"]).read_text())
             self.assertEqual(metadata["project"], "My project: one")
-        self.assertEqual(len(self.store.search("My project: one")), 7)
+        self.assertEqual(len(self.store.search("My project: one")), 8)
+
+    def test_project_relationships_roundtrip_and_reject_cycles_or_traversal(self):
+        roadmap = self.store.create_note("Roadmap", kind="roadmap", project="alpha")
+        idea = self.store.create_note("Offline idea", kind="idea", project="alpha", parent=roadmap["id"])
+        analysis = self.store.create_note("Offline analysis", kind="analysis", project="alpha", parent=idea["id"])
+        task = self.store.create_task("Build offline mode", project="alpha", parent=analysis["id"])
+        self.assertEqual(self.store.get_document(idea["id"])["parent"], roadmap["id"])
+        self.assertEqual(self.store.get_document(task["id"])["parent"], analysis["id"])
+        before = (self.root / roadmap["id"]).read_bytes()
+        with self.assertRaises(InvalidDocument):
+            self.store.update_document(roadmap["id"], "Roadmap", "", parent=task["id"])
+        self.assertEqual((self.root / roadmap["id"]).read_bytes(), before)
+        for invalid in ("../outside.md", "/tmp/outside.md", roadmap["id"]):
+            with self.assertRaises(InvalidDocument):
+                self.store.update_document(roadmap["id"], "Roadmap", "", parent=invalid)
+        missing = self.store.update_document(analysis["id"], "Offline analysis", "", parent="future-note.md")
+        self.assertEqual(missing["parent"], "future-note.md")
 
     def test_project_edits_preserve_comments_unknown_fields_and_task_status(self):
         path = self.root / "external.md"
@@ -106,6 +123,48 @@ class PlainJotCoreTests(unittest.TestCase):
         self.assertEqual(metadata["created"], "2026-08-24T22:30:00Z")
         self.assertEqual(metadata["completed"], "")
         self.assertIn("# Add filesystem watcher", markdown)
+
+    def test_analysis_classification_preserves_legacy_body_and_filename(self):
+        note = self.store.create_note("Existing analysis", "## Findings\n\nImportant evidence.")
+        before = self.store.get_document(note["id"])
+        classified = self.store.update_document(note["id"], before["title"], before["body"], kind="analysis", expected_revision=before["revision"])
+        self.assertEqual(classified["kind"], "analysis")
+        self.assertEqual(classified["id"], note["id"])
+        self.assertEqual(classified["body"], before["body"])
+        self.assertEqual(classified["type"], "note")
+        ordinary = self.store.update_document(note["id"], before["title"], before["body"], kind="")
+        self.assertEqual(ordinary["kind"], "")
+        self.assertEqual(ordinary["body"], before["body"])
+
+    def test_external_analysis_and_metadata_survive_reclassification(self):
+        path = self.root / "agent-analysis.md"
+        path.write_text("---\ntype: note\nkind: analysis\n# Evidence\ncustom: keep\nproject: alpha\nsource: codex\n---\n\n# Login review\n\nFindings\n")
+        doc = self.store.get_document(path.name)
+        self.assertEqual(doc["kind"], "analysis")
+        changed = self.store.update_document(path.name, doc["title"], doc["body"], kind="review", project="beta")
+        self.assertEqual(changed["kind"], "review")
+        self.assertEqual(changed["source"], "codex")
+        self.assertIn("# Evidence\ncustom: keep", path.read_text())
+
+    def test_invalid_kind_updates_never_modify_files(self):
+        documents = [self.store.create_note("Safe", "Body"), self.store.create_task("Task", "Body"), self.store.create_note("Board", "Drawing", kind="whiteboard")]
+        for doc in documents:
+            path = self.root / doc["id"]
+            before = path.read_bytes()
+            invalid_kinds = ("analysis",) if doc["type"] == "task" or doc["kind"] == "whiteboard" else ("task", "whiteboard", "analysis\ntype: task", 42)
+            for kind in invalid_kinds:
+                with self.assertRaises(InvalidDocument):
+                    self.store.update_document(doc["id"], "Changed", "Changed", kind=kind)
+                self.assertEqual(path.read_bytes(), before)
+        note = documents[0]
+        with self.assertRaises(ConflictError):
+            self.store.update_document(note["id"], "Old", "Old", kind="analysis", expected_revision="stale")
+        path = self.root / "full-metadata.md"
+        content = "---\n" + "\n".join("# comment" for _ in range(99)) + "\n---\n\n# Full\n\nBody\n"
+        path.write_text(content)
+        with self.assertRaises(InvalidDocument):
+            self.store.update_document(path.name, "Full", "Body", kind="analysis")
+        self.assertEqual(path.read_text(), content)
 
     def test_creates_debug_journal_as_a_markdown_note(self):
         journal = self.store.create_note("Bug: Journal no abría", "## Síntoma\n\nNo hacía nada.", kind="debug-journal")

@@ -29,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--kind", choices=tuple(t["id"] for t in list_templates() if t["type"] == "note"), default="", help="Use a developer note template")
     add.add_argument("--project", default="")
     add.add_argument("--source", default="")
+    add.add_argument("--parent", default="", help="Parent Markdown filename for the project map")
 
     task = commands.add_parser("task", help="Create a task in the agent inbox")
     task.add_argument("title")
@@ -37,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     task.add_argument("--project", default="")
     task.add_argument("--source", default="")
     task.add_argument("--status", choices=("inbox", "todo"), default="inbox")
+    task.add_argument("--parent", default="", help="Parent Markdown filename for the project map")
 
     listing = commands.add_parser("list", help="List notes or tasks")
     listing.add_argument("--project", help="Filter by exact project name")
@@ -44,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     filters.add_argument("--tasks", action="store_true", help="List todo and completed tasks")
     filters.add_argument("--inbox", action="store_true", help="List inbox tasks")
     filters.add_argument("--journals", action="store_true", help="List Debug Journal notes")
+    filters.add_argument("--analyses", action="store_true", help="List analysis notes")
 
     search = commands.add_parser("search", help="Search all notes and tasks")
     search.add_argument("query")
@@ -80,7 +83,7 @@ def run(argv: list[str] | None = None) -> int:
 
     if args.command == "add":
         body = _creation_body(args.body, args.kind)
-        document = store.create_note(args.title, body, kind=args.kind, project=args.project, source=args.source)
+        document = store.create_note(args.title, body, kind=args.kind, project=args.project, source=args.source, parent=args.parent)
         print(document["id"])
     elif args.command == "task":
         document = store.create_task(
@@ -89,6 +92,7 @@ def run(argv: list[str] | None = None) -> int:
             status=args.status,
             project=args.project,
             source=args.source,
+            parent=args.parent,
         )
         print(document["id"])
     elif args.command == "list":
@@ -98,6 +102,8 @@ def run(argv: list[str] | None = None) -> int:
             items = store.list_tasks({"todo", "done"})
         elif args.journals:
             items = [note for note in store.list_notes() if note["kind"] == "debug-journal"]
+        elif args.analyses:
+            items = [note for note in store.list_notes() if note["kind"] == "analysis"]
         else:
             items = store.list_notes()
         _print_items([item for item in items if args.project is None or item["project"] == args.project])

@@ -18,8 +18,8 @@ MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_TITLE_LENGTH = 200
 MAX_METADATA_LENGTH = 200
 TASK_STATUSES = frozenset({"inbox", "todo", "done"})
-NOTE_KINDS = frozenset({"", "debug-journal", "roadmap", "decision", "refactor", "review", "handoff", "whiteboard"})
-TASK_FIELDS = ("type", "status", "project", "source", "created", "completed")
+NOTE_KINDS = frozenset({"", "idea", "analysis", "debug-journal", "roadmap", "decision", "refactor", "review", "handoff", "whiteboard"})
+TASK_FIELDS = ("type", "status", "project", "source", "created", "completed", "parent")
 VALID_DOCUMENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
 VALID_FRONTMATTER_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 SAFE_YAML_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@:+-]*$")
@@ -302,7 +302,27 @@ class PlainJotStore:
     def get_note(self, document_id: str) -> dict:
         return self.get_document(document_id)
 
-    def create_note(self, title: str, body: str = "", *, kind: str = "", project: str = "", source: str = "") -> dict:
+    def _parent_value(self, parent: str, document_id: str | None = None) -> str:
+        parent = self._metadata_value(parent, "parent")
+        if parent and not VALID_DOCUMENT_NAME.fullmatch(parent):
+            raise InvalidDocument("Parent must be a Markdown filename inside PlainJot")
+        if document_id and parent == document_id:
+            raise InvalidDocument("A document cannot be its own parent")
+        return parent
+
+    def _check_parent_cycle(self, document_id: str, parent: str) -> None:
+        current = parent
+        visited: set[str] = set()
+        while current:
+            if current == document_id or current in visited:
+                raise InvalidDocument("Parent relationship would create a cycle")
+            visited.add(current)
+            try:
+                current = self._read(self._path_for(current)).metadata.get("parent", "")
+            except FileNotFoundError:
+                return
+
+    def create_note(self, title: str, body: str = "", *, kind: str = "", project: str = "", source: str = "", parent: str = "") -> dict:
         if kind not in NOTE_KINDS:
             raise InvalidDocument("Unsupported note kind")
         clean_title = _clean_title(title)
@@ -310,8 +330,9 @@ class PlainJotStore:
         path = self._path_for(document_id)
         project = self._metadata_value(project, "project")
         source = self._metadata_value(source, "source")
-        metadata = {"type": "note", "kind": kind, "project": project, "source": source, "created": self._timestamp()}
-        frontmatter = "\n".join(f"{key}: {_format_yaml_value(value)}" for key, value in metadata.items()) if kind or project or source else None
+        parent = self._parent_value(parent, document_id)
+        metadata = {"type": "note", "kind": kind, "project": project, "source": source, "created": self._timestamp(), "parent": parent}
+        frontmatter = "\n".join(f"{key}: {_format_yaml_value(value)}" for key, value in metadata.items()) if kind or project or source or parent else None
         self._atomic_write(path, _render_preserving_frontmatter(clean_title, body, frontmatter))
         return self.get_document(document_id)
 
@@ -323,6 +344,7 @@ class PlainJotStore:
         status: str = "inbox",
         project: str = "",
         source: str = "",
+        parent: str = "",
     ) -> dict:
         clean_title = _clean_title(title)
         status = status.lower()
@@ -335,6 +357,7 @@ class PlainJotStore:
             "source": self._metadata_value(source, "source"),
             "created": self._timestamp(),
             "completed": "",
+            "parent": self._parent_value(parent),
         }
         document_id = f"{slugify(clean_title)}-{uuid.uuid4().hex[:7]}.md"
         path = self._path_for(document_id)
@@ -349,19 +372,33 @@ class PlainJotStore:
         *,
         expected_revision: str | None = None,
         project: str | None = None,
+        kind: str | None = None,
+        parent: str | None = None,
     ) -> dict:
         path = self._path_for(document_id)
         existing = self._read(path)
         self._check_revision(existing, expected_revision)
         raw = existing.frontmatter_raw
+        changes = {}
         if project is not None:
-            value = self._metadata_value(project, "project")
-            if value != existing.metadata.get("project", ""):
+            changes["project"] = self._metadata_value(project, "project")
+        if kind is not None:
+            if not isinstance(kind, str) or kind not in NOTE_KINDS:
+                raise InvalidDocument("Unsupported note kind")
+            if existing.is_task or (kind != existing.metadata.get("kind", "") and "whiteboard" in (kind, existing.metadata.get("kind", ""))):
+                raise InvalidDocument("Tasks and whiteboards cannot change note kind")
+            changes["kind"] = kind
+        if parent is not None:
+            parent = self._parent_value(parent, document_id)
+            self._check_parent_cycle(document_id, parent)
+            changes["parent"] = parent
+        for key, value in changes.items():
+            if value != existing.metadata.get(key, ""):
                 lines = (raw or "").splitlines()
-                lines = [line for line in lines if line.split(":", 1)[0].strip() != "project"]
-                lines.append(f"project: {_format_yaml_value(value)}")
+                lines = [line for line in lines if line.split(":", 1)[0].strip() != key]
+                lines.append(f"{key}: {_format_yaml_value(value)}")
                 if len(lines) >= 100:
-                    raise InvalidDocument("Frontmatter is too large to add a project")
+                    raise InvalidDocument("Frontmatter is too large to update metadata")
                 raw = "\n".join(lines)
         content = _render_preserving_frontmatter(title, body, raw)
         self._atomic_write(path, content)

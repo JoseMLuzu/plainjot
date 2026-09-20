@@ -8,8 +8,8 @@ struct StoreFailure: LocalizedError {
 }
 
 private let taskStatuses: Set<String> = ["inbox", "todo", "done"]
-private let taskFields = ["type", "status", "project", "source", "created", "completed"]
-private let noteKinds: Set<String> = ["", "debug-journal", "roadmap", "decision", "refactor", "review", "handoff", "whiteboard"]
+private let taskFields = ["type", "status", "project", "source", "created", "completed", "parent"]
+private let noteKinds: Set<String> = ["", "idea", "analysis", "debug-journal", "roadmap", "decision", "refactor", "review", "handoff", "whiteboard"]
 private let maximumFileBytes = 2 * 1024 * 1024
 
 struct PlainJotConfiguration {
@@ -99,7 +99,8 @@ final class PlainJotStore {
                 throw StoreFailure(status: 400, message: "El tipo de nota debe ser texto")
             }
             return (201, try createNote(title: fields.title, body: fields.body, kind: kind,
-                project: try textField(payload, "project"), source: try textField(payload, "source")))
+                project: try textField(payload, "project"), source: try textField(payload, "source"),
+                parent: try textField(payload, "parent")))
         }
         if method == "POST" && path == "/api/tasks" {
             let fields = try documentFields(from: body)
@@ -111,7 +112,8 @@ final class PlainJotStore {
                     body: fields.body,
                     status: try textField(payload, "status", fallback: "inbox"),
                     project: try textField(payload, "project"),
-                    source: try textField(payload, "source")
+                    source: try textField(payload, "source"),
+                    parent: try textField(payload, "parent")
                 )
             )
         }
@@ -127,6 +129,8 @@ final class PlainJotStore {
                 let payload = body as? [String: Any] ?? [:]
                 let expected = try optionalTextField(payload, "expected_revision")
                 let project = payload["project"] == nil ? nil : try textField(payload, "project")
+                let kind = payload["kind"] == nil ? nil : try textField(payload, "kind")
+                let parent = payload["parent"] == nil ? nil : try textField(payload, "parent")
                 return (
                     200,
                     try updateDocument(
@@ -134,7 +138,9 @@ final class PlainJotStore {
                         title: fields.title,
                         body: fields.body,
                         expectedRevision: expected,
-                        project: project
+                        project: project,
+                        kind: kind,
+                        parent: parent
                     )
                 )
             case "DELETE":
@@ -209,7 +215,7 @@ final class PlainJotStore {
         return try secureExistingURL(candidate).lastPathComponent
     }
 
-    func createNote(title: String, body: String, kind: String = "", project: String = "", source: String = "") throws -> [String: Any] {
+    func createNote(title: String, body: String, kind: String = "", project: String = "", source: String = "", parent: String = "") throws -> [String: Any] {
         guard noteKinds.contains(kind) else {
             throw StoreFailure(status: 400, message: "Tipo de nota no compatible")
         }
@@ -219,9 +225,10 @@ final class PlainJotStore {
         let markdown = try renderMarkdown(title: cleanTitle, body: body)
         let project = try metadataValue(project, field: "project")
         let source = try metadataValue(source, field: "source")
-        let values = [("type", "note"), ("kind", kind), ("project", project), ("source", source), ("created", timestamp())]
+        let parent = try parentValue(parent, documentID: documentID)
+        let values = [("type", "note"), ("kind", kind), ("project", project), ("source", source), ("created", timestamp()), ("parent", parent)]
         let raw = values.map { "\($0.0): \(formatYAMLValue($0.1))" }.joined(separator: "\n")
-        let content = kind.isEmpty && project.isEmpty && source.isEmpty ? markdown : "---\n\(raw)\n---\n\n\(markdown)"
+        let content = kind.isEmpty && project.isEmpty && source.isEmpty && parent.isEmpty ? markdown : "---\n\(raw)\n---\n\n\(markdown)"
         try atomicWrite(content, to: fileURL)
         return try getDocument(documentID)
     }
@@ -231,7 +238,8 @@ final class PlainJotStore {
         body: String,
         status: String = "inbox",
         project: String = "",
-        source: String = ""
+        source: String = "",
+        parent: String = ""
     ) throws -> [String: Any] {
         let cleanTitle = try cleanTitle(title)
         let normalizedStatus = status.lowercased()
@@ -245,6 +253,7 @@ final class PlainJotStore {
             "source": try metadataValue(source, field: "source"),
             "created": timestamp(),
             "completed": "",
+            "parent": try parentValue(parent),
         ]
         let documentID = "\(slugify(cleanTitle))-\(UUID().uuidString.lowercased().prefix(7)).md"
         let fileURL = try fileURL(for: documentID)
@@ -257,22 +266,42 @@ final class PlainJotStore {
         title: String,
         body: String,
         expectedRevision: String? = nil,
-        project: String? = nil
+        project: String? = nil,
+        kind: String? = nil,
+        parent: String? = nil
     ) throws -> [String: Any] {
         let fileURL = try fileURL(for: documentID)
         let existing = try readDocument(fileURL)
         try checkRevision(existing, expected: expectedRevision)
         let markdown = try renderMarkdown(title: title, body: body)
         var raw = existing.frontmatterRaw
+        var changes: [(String, String)] = []
         if let project = project {
-            let value = try metadataValue(project, field: "project")
-            if value != (existing.metadata["project"] ?? "") {
+            changes.append(("project", try metadataValue(project, field: "project")))
+        }
+        if let kind = kind {
+            guard noteKinds.contains(kind) else {
+                throw StoreFailure(status: 400, message: "Tipo de nota no compatible")
+            }
+            let oldKind = existing.metadata["kind"] ?? ""
+            guard !existing.isTask, kind == oldKind || (kind != "whiteboard" && oldKind != "whiteboard") else {
+                throw StoreFailure(status: 400, message: "Las tareas y pizarras no pueden cambiar de tipo de nota")
+            }
+            changes.append(("kind", kind))
+        }
+        if let parent = parent {
+            let value = try parentValue(parent, documentID: documentID)
+            try checkParentCycle(documentID: documentID, parent: value)
+            changes.append(("parent", value))
+        }
+        for (key, value) in changes {
+            if value != (existing.metadata[key] ?? "") {
                 var lines = (raw?.components(separatedBy: "\n") ?? []).filter {
-                    $0.components(separatedBy: ":").first?.trimmingCharacters(in: .whitespaces) != "project"
+                    $0.components(separatedBy: ":").first?.trimmingCharacters(in: .whitespaces) != key
                 }
-                lines.append("project: \(formatYAMLValue(value))")
+                lines.append("\(key): \(formatYAMLValue(value))")
                 guard lines.count < 100 else {
-                    throw StoreFailure(status: 400, message: "El frontmatter es demasiado grande para añadir un proyecto")
+                    throw StoreFailure(status: 400, message: "El frontmatter es demasiado grande para actualizar metadatos")
                 }
                 raw = lines.joined(separator: "\n")
             }
@@ -518,6 +547,30 @@ final class PlainJotStore {
             throw StoreFailure(status: 400, message: "\(field) debe ser texto de una sola línea")
         }
         return value.trimmingCharacters(in: .whitespaces)
+    }
+
+    private func parentValue(_ value: String, documentID: String? = nil) throws -> String {
+        let parent = try metadataValue(value, field: "parent")
+        guard parent.isEmpty || isValidDocumentID(parent) else {
+            throw StoreFailure(status: 400, message: "parent debe ser un archivo Markdown dentro de PlainJot")
+        }
+        guard parent != documentID else {
+            throw StoreFailure(status: 400, message: "Un documento no puede ser su propio padre")
+        }
+        return parent
+    }
+
+    private func checkParentCycle(documentID: String, parent: String) throws {
+        var current = parent
+        var visited: Set<String> = []
+        while !current.isEmpty {
+            guard current != documentID, !visited.contains(current) else {
+                throw StoreFailure(status: 400, message: "La relación parent crearía un ciclo")
+            }
+            visited.insert(current)
+            guard let document = try? readDocument(fileURL(for: current)) else { return }
+            current = document.metadata["parent"] ?? ""
+        }
     }
 
     private func fileURL(for documentID: String) throws -> URL {

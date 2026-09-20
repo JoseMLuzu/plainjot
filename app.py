@@ -103,17 +103,18 @@ def make_handler(store: PlainJotStore):
             title, body = fields
             if route == "/api/notes":
                 kind = payload.get("kind", "")
-                project, source = payload.get("project", ""), payload.get("source", "")
-                if not all(isinstance(value, str) for value in (kind, project, source)):
+                project, source, parent = payload.get("project", ""), payload.get("source", ""), payload.get("parent", "")
+                if not all(isinstance(value, str) for value in (kind, project, source, parent)):
                     self._send_error(HTTPStatus.BAD_REQUEST, "Note metadata must be text")
                     return
-                self._with_store(lambda: store.create_note(title, body, kind=kind, project=project, source=source), HTTPStatus.CREATED)
+                self._with_store(lambda: store.create_note(title, body, kind=kind, project=project, source=source, parent=parent), HTTPStatus.CREATED)
                 return
             if route == "/api/tasks":
                 status = payload.get("status", "inbox")
                 project = payload.get("project", "")
                 source = payload.get("source", "")
-                if not all(isinstance(value, str) for value in (status, project, source)):
+                parent = payload.get("parent", "")
+                if not all(isinstance(value, str) for value in (status, project, source, parent)):
                     self._send_error(HTTPStatus.BAD_REQUEST, "Task metadata must be text")
                     return
                 self._with_store(
@@ -123,6 +124,7 @@ def make_handler(store: PlainJotStore):
                         status=status,
                         project=project,
                         source=source,
+                        parent=parent,
                     ),
                     HTTPStatus.CREATED,
                 )
@@ -147,6 +149,12 @@ def make_handler(store: PlainJotStore):
             if "project" in payload and not isinstance(payload["project"], str):
                 self._send_error(HTTPStatus.BAD_REQUEST, "Project must be text")
                 return
+            if "kind" in payload and not isinstance(payload["kind"], str):
+                self._send_error(HTTPStatus.BAD_REQUEST, "Note kind must be text")
+                return
+            if "parent" in payload and not isinstance(payload["parent"], str):
+                self._send_error(HTTPStatus.BAD_REQUEST, "Parent must be text")
+                return
             if expected is not None and not isinstance(expected, str):
                 self._send_error(HTTPStatus.BAD_REQUEST, "Revision must be text")
                 return
@@ -157,6 +165,8 @@ def make_handler(store: PlainJotStore):
                     fields[1],
                     expected_revision=expected,
                     project=payload.get("project"),
+                    kind=payload.get("kind"),
+                    parent=payload.get("parent"),
                 )
             )
 

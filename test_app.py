@@ -34,7 +34,7 @@ class NotesStoreTests(unittest.TestCase):
     def test_template_api_and_shared_project_metadata(self):
         status, templates = self.request("GET", "/api/templates")
         self.assertEqual(status, 200)
-        self.assertEqual(len(templates), 7)
+        self.assertEqual(len(templates), 9)
         _, note = self.request("POST", "/api/notes", {"title": "Plan", "body": "Context", "kind": "roadmap", "project": "alpha", "source": "codex"})
         self.assertEqual(note["project"], "alpha")
         status, updated = self.request("PUT", f"/api/documents/{note['id']}", {"title": "Plan", "body": "Context", "project": "beta", "expected_revision": note["revision"]})
@@ -79,6 +79,29 @@ class NotesStoreTests(unittest.TestCase):
         status, _ = self.request("DELETE", f"/api/documents/{board['id']}")
         self.assertEqual(status, 204)
         self.assertFalse(path.exists())
+
+    def test_api_classifies_notes_without_changing_content_and_rejects_invalid_kinds(self):
+        note = self.store.create_note("Analysis", "Findings")
+        status, changed = self.request("PUT", f"/api/documents/{note['id']}", {"title": note["title"], "body": note["body"], "kind": "analysis", "expected_revision": note["revision"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(changed["kind"], "analysis")
+        self.assertEqual(changed["body"], "Findings")
+        for kind in (42, None, "analysis\ntype: task", "whiteboard"):
+            status, _ = self.request("PUT", f"/api/documents/{note['id']}", {"title": "Changed", "kind": kind})
+            self.assertEqual(status, 400)
+        self.assertEqual(self.store.get_document(note["id"])["title"], "Analysis")
+
+    def test_api_creates_and_updates_project_relationships(self):
+        _, root = self.request("POST", "/api/notes", {"title": "Roadmap", "body": "", "kind": "roadmap", "project": "alpha"})
+        status, child = self.request("POST", "/api/notes", {"title": "Idea", "body": "", "kind": "idea", "project": "alpha", "parent": root["id"]})
+        self.assertEqual(status, 201)
+        self.assertEqual(child["parent"], root["id"])
+        status, updated = self.request("PUT", f"/api/documents/{child['id']}", {"title": "Idea", "body": "", "parent": "missing.md", "expected_revision": child["revision"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(updated["parent"], "missing.md")
+        for parent in (42, None, "../outside.md", child["id"]):
+            status, _ = self.request("PUT", f"/api/documents/{child['id']}", {"title": "Idea", "body": "", "parent": parent})
+            self.assertEqual(status, 400)
 
     def test_create_update_list_and_delete_note(self):
         created = self.store.create_note("Mi idea útil", "Primer contenido")

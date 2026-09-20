@@ -523,13 +523,40 @@ func runSelfTest() throws {
         try requireStoreFailure(status: 400) { _ = try validatedWhiteboardExport(["filename": "board.svg", "svg": unsafe]) }
     }
     try requireStoreFailure(status: 400) { _ = try validatedWhiteboardExport(["filename": "../board.svg", "svg": safeSVG]) }
+    try requireStoreFailure(status: 400) { _ = try store.updateDocument(drawingID, title: "Converted", body: "", kind: "analysis") }
     try store.deleteDocument(drawingID)
     discardedDocumentURL = nil
     let templatesResult = try store.route(method: "GET", path: "/api/templates", body: nil)
+    let analysis = try store.createNote(title: "Login analysis", body: "## Hallazgos\n\nEvidence", kind: "analysis", project: "alpha", source: "codex")
+    let analysisID = analysis["id"] as? String ?? ""
+    try require(analysis["kind"] as? String == "analysis", "Falló la creación del análisis")
+    let ordinary = try store.updateDocument(analysisID, title: "Login analysis", body: "## Hallazgos\n\nEvidence", expectedRevision: analysis["revision"] as? String, kind: "")
+    try require(ordinary["kind"] as? String == "" && ordinary["source"] as? String == "codex", "Se perdieron los metadatos al cambiar de tipo")
+    let classified = try store.route(method: "PUT", path: "/api/documents/\(analysisID)", body: ["title": "Login analysis", "body": "## Hallazgos\n\nEvidence", "kind": "analysis", "expected_revision": ordinary["revision"] as? String ?? ""])
+    try require((classified.body as? [String: Any])?["kind"] as? String == "analysis", "Falló la clasificación del análisis")
+    try requireStoreFailure(status: 409) { _ = try store.updateDocument(analysisID, title: "Old", body: "", expectedRevision: "stale", kind: "") }
+    for invalid in ["whiteboard", "task", "analysis\ntype: task"] {
+        try requireStoreFailure(status: 400) { _ = try store.updateDocument(analysisID, title: "Changed", body: "", kind: invalid) }
+    }
+    try requireStoreFailure(status: 400) { _ = try store.route(method: "PUT", path: "/api/documents/\(analysisID)", body: ["title": "Changed", "kind": 42]) }
+    let keptAnalysis = try store.getDocument(analysisID)
+    try require(keptAnalysis["body"] as? String == "## Hallazgos\n\nEvidence", "Se modificó el análisis tras un cambio inválido")
+    let idea = try store.createNote(title: "Offline idea", body: "Proposal", kind: "idea", project: "alpha", parent: analysisID)
+    let ideaID = idea["id"] as? String ?? ""
+    let relatedTask = try store.createTask(title: "Prototype offline", body: "", project: "alpha", parent: ideaID)
+    let relatedTaskID = relatedTask["id"] as? String ?? ""
+    try require(idea["parent"] as? String == analysisID && relatedTask["parent"] as? String == ideaID, "Se perdieron relaciones del mapa")
+    try requireStoreFailure(status: 400) { _ = try store.updateDocument(analysisID, title: "Login analysis", body: "Evidence", parent: relatedTaskID) }
+    for invalidParent in [analysisID, "../outside.md", "/tmp/outside.md"] {
+        try requireStoreFailure(status: 400) { _ = try store.updateDocument(analysisID, title: "Login analysis", body: "Evidence", parent: invalidParent) }
+    }
+    let missingParent = try store.updateDocument(ideaID, title: "Offline idea", body: "Proposal", parent: "future-note.md")
+    try require(missingParent["parent"] as? String == "future-note.md", "No se conservó una referencia externa pendiente")
+    try requireStoreFailure(status: 400) { _ = try store.route(method: "PUT", path: "/api/documents/\(ideaID)", body: ["title": "Idea", "parent": 42]) }
     guard let templates = templatesResult.body as? [[String: Any]] else {
         throw StoreFailure(status: 500, message: "No se pudo cargar el catálogo de plantillas")
     }
-    try require(templates.count == 7, "Faltan plantillas de desarrollo")
+    try require(templates.count == 9, "Faltan plantillas de desarrollo")
     for template in templates where template["type"] as? String == "note" {
         let kind = template["id"] as? String ?? ""
         let developerNote = try store.createNote(title: "Template", body: template["body"] as? String ?? "", kind: kind, project: "alpha", source: "codex")
@@ -559,6 +586,7 @@ func runSelfTest() throws {
         _ = try store.updateDocument("long-metadata.md", title: "Long", body: "Body", project: "alpha")
     }
     let preservedLongMetadata = try String(contentsOf: longMetadataURL, encoding: .utf8)
+    try requireStoreFailure(status: 400) { _ = try store.updateDocument("long-metadata.md", title: "Long", body: "Body", kind: "analysis") }
     try require(preservedLongMetadata == longMetadata, "Se modificó un frontmatter que excedería el límite")
     let journalResult = try store.route(
         method: "POST",
@@ -656,7 +684,7 @@ func runSelfTest() throws {
     """
     try externalTask.write(to: externalURL, atomically: true, encoding: .utf8)
     let tasks = try store.listTasks()
-    try require(tasks.count == 2, "No se detectó la tarea externa")
+    try require(tasks.contains { $0["id"] as? String == "external-task.md" }, "No se detectó la tarea externa")
 
     let todo = try store.route(
         method: "PATCH",
