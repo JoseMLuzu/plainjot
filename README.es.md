@@ -18,18 +18,19 @@ PlainJot es deliberadamente pequeño. No es un workspace, grafo de conocimiento 
 
 Las notas con encabezados Markdown muestran un índice ligero a la derecha. Pulsa **Ocultar índice** para ampliar el documento; tu elección se recuerda localmente. Los títulos son más compactos y se desplazan con la vista previa, sin quedarse fijos mientras lees.
 
-El icono junto al estado de guardado oculta o muestra la barra izquierda. Al ocultarla, el documento gana espacio y el índice derecho se hace más ancho y legible. Esta preferencia se recuerda localmente; ⌘N y ⌘K vuelven a mostrar la barra para crear o buscar. Una línea sutil separa el título del contenido en lectura y escritura.
+El icono a la izquierda del encabezado oculta o muestra la barra lateral. Al ocultarla, el documento gana espacio y el índice derecho se hace más ancho y legible. Esta preferencia se recuerda localmente; ⌘N y ⌘K vuelven a mostrar la barra para crear o buscar. Una línea sutil separa el título del contenido en lectura y escritura.
 
 ## Qué hace
 
-PlainJot tiene dos secciones sencillas:
+PlainJot tiene tres secciones sencillas:
 
-- **Documentos** para notas, journals, roadmaps, decisiones, reviews, refactorizaciones, handoffs y pizarras. Una etiqueta discreta indica el tipo de cada documento.
+- **Notas** para notas, journals, roadmaps, decisiones, reviews, refactorizaciones, handoffs y pizarras. Una etiqueta discreta indica el tipo de cada documento.
+- **Análisis** para investigaciones, hallazgos y recomendaciones, identificados con `kind: analysis` en archivos Markdown normales.
 - **Tareas** con filtros **Inbox**, **Pendientes** y **Hechas**, más Sprint View opcional. Acepta las propuestas de Inbox para pasarlas a Pendientes.
 
 Elige un proyecto si lo necesitas, pulsa **+ Crear** y selecciona directamente el tipo. No hay un modo de desarrollo ni un dropdown de plantillas que configurar antes. Las tareas creadas por humanos empiezan en `todo`; la CLI conserva `inbox` como predeterminado para propuestas de agentes.
 
-La lista de tareas sigue siendo la vista predeterminada. Sprint View solo ordena las mismas tareas Markdown como **Inbox**, **Por hacer** y **Hecho**; no añade tableros, metadatos de sprint ni otra fuente de verdad.
+La lista de tareas sigue siendo la vista predeterminada. Usa el círculo de estado para avanzar una tarea sin abrirla. Sprint View ordena las mismas tareas Markdown como **Inbox**, **Por hacer** y **Hecho**, y permite arrastrar tarjetas entre esos estados; no añade metadatos de sprint ni otra fuente de verdad.
 
 La app observa la carpeta PlainJot en macOS, por lo que las creaciones, ediciones, renombres y eliminaciones externas aparecen automáticamente. El guardado automático comprueba revisiones para no sobrescribir silenciosamente una edición externa. Si ambas versiones cambian, PlainJot protege el borrador local y te permite elegir cuál conservar.
 
@@ -39,7 +40,7 @@ Pulsa la ruta de la esquina inferior izquierda para elegir otra carpeta local. P
 
 ## Debug Journal
 
-Pulsa **+ Crear → Debug Journal** para crear un registro en Documentos. Incluye: Síntoma, Hipótesis, Investigación, Root cause, Solución y Qué aprendí.
+Pulsa **+ Crear → Debug Journal** para crear un registro en Notas. Incluye: Síntoma, Hipótesis, Investigación, Root cause, Solución y Qué aprendí.
 
 Los registros siguen siendo notas normales en la misma carpeta, identificadas con `type: note` y `kind: debug-journal` en el frontmatter YAML. Aparecen junto al resto de documentos; cambiar de pestaña no mueve ni elimina archivos. Los agentes pueden escribir ese frontmatter directamente o ejecutar:
 
@@ -55,7 +56,27 @@ La app y la CLI comparten las mismas plantillas. `--body` sustituye el texto ini
 
 ## Libreta para desarrolladores
 
-El menú **+ Crear** incluye **Ticket**, **Roadmap**, **Decisión técnica**, **Refactorización**, **Review** y **Handoff de sesión**, además de Debug Journal. Los tickets son Tareas normales con criterios de aceptación en el cuerpo. Las demás plantillas son notas con un campo `kind` agrupadas en Documentos. Las notas antiguas o con tipos desconocidos siguen visibles en la misma lista.
+El menú **+ Crear** incluye **Análisis**, **Ticket**, **Roadmap**, **Decisión técnica**, **Refactorización**, **Review** y **Handoff de sesión**, además de Debug Journal. Los tickets son Tareas normales con criterios de aceptación en el cuerpo. Los análisis tienen su sección; las demás plantillas siguen en Notas. Las notas antiguas o con tipos desconocidos siguen visibles sin clasificación automática.
+
+El encabezado muestra el proyecto y tipo del documento, incluso con la barra izquierda oculta. Pulsa **⌘P** o el icono de búsqueda del encabezado para cambiar de documento entre todos los proyectos sin mostrar la barra. Busca por título, proyecto o tipo; usa las flechas y Enter para abrir, o Escape para cerrar.
+
+Al elegir un proyecto, PlainJot abre su **Mapa de contexto**. El mapa reúne notas, ideas, análisis, decisiones y tareas en un árbol navegable. Un documento sin relación aparece en la raíz; **+** junto a un nodo crea un documento relacionado. En **Escribir → Depende de** puedes cambiar la relación sin mover ni renombrar archivos.
+
+Las relaciones son metadatos Markdown normales. `parent` contiene el nombre del archivo padre; las referencias rotas o circulares creadas externamente se muestran para revisión y nunca se reparan silenciosamente:
+
+```yaml
+project: Mi App
+kind: analysis
+parent: idea-modo-offline.md
+```
+
+Para ordenar una nota existente, abre **Escribir → Tipo → Análisis**. Solo actualiza el frontmatter: no cambia el nombre ni el cuerpo del archivo. Puedes revertirlo eligiendo **Nota**. Las tareas y pizarras no se convierten desde este selector. Los agentes pueden crear análisis directamente:
+
+```bash
+plainjot add "Investigación de autenticación" --kind analysis --project mi-app --source codex
+plainjot add "Idea: modo offline" --kind idea --project mi-app --parent roadmap-mi-app.md
+plainjot list --analyses --project mi-app
+```
 
 El filtro **Proyecto**, encima de la navegación, agrupa documentos y tareas, incluido Sprint View. Los elementos nuevos heredan el proyecto seleccionado; **Todos los proyectos** no exige asignar uno. Edita el proyecto en **Escribir** (o **Markdown** para pizarras); la vista previa oculta los controles de metadatos. Son metadatos YAML, no carpetas; las notas antiguas no necesitan migración. Vaciar el campo quita la asignación, no el documento.
 
@@ -73,7 +94,7 @@ Cualquier agente con acceso local al filesystem puede usar los comandos o escrib
 
 ## Pizarra
 
-Pulsa **+ Crear → Pizarra** para dibujar dentro de Documentos. Incluye lápiz, borrador de trazos completos, rectángulos, flechas, texto, cuatro colores y deshacer/rehacer. Los dibujos se guardan automáticamente con el mismo almacenamiento de las notas. Puedes exportar SVG con el diálogo nativo de guardado o mediante una descarga en el navegador durante desarrollo. No incluye PNG ni colaboración.
+Pulsa **+ Crear → Pizarra** para dibujar dentro de Notas. Incluye lápiz, borrador de trazos completos, rectángulos, flechas, texto, cuatro colores y deshacer/rehacer. Los dibujos se guardan automáticamente con el mismo almacenamiento de las notas. Puedes exportar SVG con el diálogo nativo de guardado o mediante una descarga en el navegador durante desarrollo. No incluye PNG ni colaboración.
 
 Cada pizarra es un `.md` normal con `type: note`, `kind: whiteboard`, proyecto opcional y un bloque JSON `plainjot-whiteboard`. Consulta [el formato del dibujo](docs/WHITEBOARD.md). Los agentes pueden crear o editar esos archivos directamente; los conflictos protegen el borrador local. Enlaza una pizarra desde un journal con `[Flujo](arquitectura.md)`; debajo del lienzo aparece un enlace listo para copiar. Los datos inválidos o de una versión desconocida se conservan y se pueden corregir en la pestaña **Markdown**.
 

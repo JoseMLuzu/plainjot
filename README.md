@@ -20,18 +20,19 @@ PlainJot is intentionally small. It is not a workspace, knowledge graph, or proj
 
 Notes with Markdown headings get a lightweight outline on the right. Use **Ocultar índice** in the current Spanish interface to hide it and expand the document. Your choice is remembered locally. Compact titles scroll with the preview instead of staying pinned while you read.
 
-The sidebar icon beside the save status hides or restores left navigation. Hiding it gives the document more space and makes the right outline wider and more readable. This preference is remembered locally; ⌘N and ⌘K reveal navigation when creating or searching. A subtle line separates the title from the content in preview and write modes.
+The sidebar icon on the left of the document header hides or restores navigation. Hiding it gives the document more space and makes the right outline wider and more readable. This preference is remembered locally; ⌘N and ⌘K reveal navigation when creating or searching. A subtle line separates the title from the content in preview and write modes.
 
 ## What it does
 
-PlainJot has two quiet sections:
+PlainJot has three quiet sections:
 
-- **Documents** for notes, journals, roadmaps, decisions, reviews, refactoring plans, handoffs, and whiteboards. A small label identifies each document's type.
+- **Notes** for notes, journals, roadmaps, decisions, reviews, refactoring plans, handoffs, and whiteboards. A small label identifies each document's type.
+- **Analyses** for investigations, findings, and recommendations, marked with `kind: analysis` in ordinary Markdown files.
 - **Tasks** with **Inbox**, **Pending**, and **Done** filters, plus optional Sprint View. Accept agent proposals from Inbox to move them to Pending.
 
 Choose a project if useful, then click **+ Crear** and select a document type directly. There is no separate developer mode or template dropdown to configure first. Human-created tasks start as `todo`; the CLI still defaults to `inbox` for agent proposals.
 
-The task list remains the default. Sprint View simply arranges the same Markdown tasks as **Inbox**, **To do**, and **Done**; it does not add boards, sprint metadata, or a separate source of truth.
+The task list remains the default. Use its status circle to advance a task without opening it. Sprint View arranges the same Markdown tasks as **Inbox**, **To do**, and **Done**, and lets you drag cards between those states; it does not add sprint metadata or a separate source of truth.
 
 It watches the PlainJot directory on macOS, so external creates, edits, renames, and deletes appear automatically. Autosave uses revision checks to avoid silently overwriting an external edit. If both versions change, PlainJot protects the local draft and lets you choose which version to keep.
 
@@ -41,7 +42,7 @@ Click the folder path in the bottom-left corner to choose another local folder. 
 
 ## Debug Journal
 
-Click **+ Crear → Debug Journal** to create a debugging entry in Documents. New entries start with a small template: symptom, hypothesis, investigation, root cause, solution, and lessons learned.
+Click **+ Crear → Debug Journal** to create a debugging entry in Notes. New entries start with a small template: symptom, hypothesis, investigation, root cause, solution, and lessons learned.
 
 Entries remain normal notes in the same folder, marked with `type: note` and `kind: debug-journal` in YAML frontmatter. They appear alongside other documents; switching tabs never moves or deletes files. Agents can write that frontmatter directly or use:
 
@@ -57,7 +58,27 @@ The app and CLI share the same starter templates. `--body` replaces the starter 
 
 ## Developer notebook
 
-The **+ Crear** menu includes **Ticket**, **Roadmap**, **Technical decision**, **Refactoring**, **Review**, and **Session handoff**, alongside Debug Journal. Tickets are ordinary Tasks with acceptance criteria in the body, not a new entity or workflow; creating one opens it in Tasks. Other templates are notes with a `kind` field, grouped in Documents. Legacy and unknown note kinds stay discoverable in the same list.
+The **+ Crear** menu includes **Analysis**, **Ticket**, **Roadmap**, **Technical decision**, **Refactoring**, **Review**, and **Session handoff**, alongside Debug Journal. Tickets are ordinary Tasks with acceptance criteria in the body, not a new entity or workflow; creating one opens it in Tasks. Analyses have their own section; the other note templates remain in Notes. Legacy and unknown note kinds stay discoverable without automatic classification.
+
+The header shows the current project and document type, even with navigation hidden. Press **⌘P** or click the search icon in the header to open another document across all projects without restoring the sidebar. Search by title, project, or type; use arrow keys and Enter, or Escape to close.
+
+Selecting a project opens its **Context Map**. The map brings notes, ideas, analyses, decisions, and tasks into one navigable tree. Unrelated documents appear at the root; use **+** beside a node to create a related document. Change a relation under **Escribir → Depende de** without moving or renaming files.
+
+Relationships remain ordinary Markdown metadata. `parent` is the parent document's filename. Broken or circular relationships written externally are surfaced for review and never silently repaired:
+
+```yaml
+project: My App
+kind: analysis
+parent: offline-mode-idea.md
+```
+
+To classify an existing note, open **Escribir → Tipo → Análisis**. This updates frontmatter, not the filename or body, and can be reversed by choosing **Nota**. Tasks and whiteboards cannot be converted through this control. Agents can create analyses directly:
+
+```bash
+plainjot add "Authentication investigation" --kind analysis --project my-app --source codex
+plainjot add "Idea: offline mode" --kind idea --project my-app --parent my-app-roadmap.md
+plainjot list --analyses --project my-app
+```
 
 Choose **Proyecto** above the sidebar navigation to filter documents and tasks, including Sprint View. New items inherit that project; **Todos los proyectos** requires no assignment. Edit a document's project in **Escribir** (or **Markdown** for whiteboards); preview hides metadata controls for calmer reading. Projects are plain YAML metadata, not folders; old notes need no migration. Clearing the field removes the assignment, not the document.
 
@@ -75,7 +96,7 @@ Any agent with local filesystem access can use these commands or write Markdown 
 
 ## Whiteboard
 
-Choose **+ Crear → Pizarra** for a local drawing pad within Documents: pen, whole-stroke eraser, rectangles, arrows, text, four colors, and undo/redo. Drawings autosave through the same filesystem core as notes. Export an SVG using the native Save dialog, or a browser download in web development. PNG export and collaboration are not included.
+Choose **+ Crear → Pizarra** for a local drawing pad within Notes: pen, whole-stroke eraser, rectangles, arrows, text, four colors, and undo/redo. Drawings autosave through the same filesystem core as notes. Export an SVG using the native Save dialog, or a browser download in web development. PNG export and collaboration are not included.
 
 Each board is a normal `.md` file with `type: note`, `kind: whiteboard`, optional project metadata, and one fenced `plainjot-whiteboard` JSON block. See [the drawing format](docs/WHITEBOARD.md). Agents can create or edit these files directly; revision conflicts protect local drawing drafts. Link a board from a journal with `[Flow](architecture.md)`. The filename is shown below the canvas. Unsupported or malformed drawing data is preserved and can be repaired in the **Markdown** tab.
 
