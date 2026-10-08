@@ -62,7 +62,7 @@ The **+ Crear** menu includes **Analysis**, **Ticket**, **Roadmap**, **Technical
 
 The header shows the current project and document type, even with navigation hidden. Press **⌘P** or click the search icon in the header to open another document across all projects without restoring the sidebar. Search by title, project, or type; use arrow keys and Enter, or Escape to close.
 
-Selecting a project opens its **Context Map**. The map brings notes, ideas, analyses, decisions, and tasks into one navigable tree. Unrelated documents appear at the root; use **+** beside a node to create a related document. Change a relation under **Escribir → Depende de** without moving or renaming files.
+Selecting a project opens its **Context Map**. The map brings notes, ideas, analyses, decisions, and tasks into one connected canvas. Arrange it automatically to the right or downward, then drag any card to the position that reads best. Layout positions stay as a local visual preference; Markdown `parent` relationships remain the shared source of truth. Use **+** beside a card to create a related document, or change its relation under **Escribir → Depende de** without moving or renaming files.
 
 Relationships remain ordinary Markdown metadata. `parent` is the parent document's filename. Broken or circular relationships written externally are surfaced for review and never silently repaired:
 

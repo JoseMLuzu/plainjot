@@ -60,7 +60,7 @@ El menú **+ Crear** incluye **Análisis**, **Ticket**, **Roadmap**, **Decisión
 
 El encabezado muestra el proyecto y tipo del documento, incluso con la barra izquierda oculta. Pulsa **⌘P** o el icono de búsqueda del encabezado para cambiar de documento entre todos los proyectos sin mostrar la barra. Busca por título, proyecto o tipo; usa las flechas y Enter para abrir, o Escape para cerrar.
 
-Al elegir un proyecto, PlainJot abre su **Mapa de contexto**. El mapa reúne notas, ideas, análisis, decisiones y tareas en un árbol navegable. Un documento sin relación aparece en la raíz; **+** junto a un nodo crea un documento relacionado. En **Escribir → Depende de** puedes cambiar la relación sin mover ni renombrar archivos.
+Al elegir un proyecto, PlainJot abre su **Mapa de contexto**. El mapa reúne notas, ideas, análisis, decisiones y tareas en un lienzo conectado. Puedes ordenarlo automáticamente hacia la derecha o hacia abajo y después arrastrar cada tarjeta donde resulte más clara. Las posiciones son una preferencia visual local; las relaciones `parent` en Markdown siguen siendo la fuente de verdad compartida. **+** junto a una tarjeta crea un documento relacionado y **Escribir → Depende de** cambia la relación sin mover ni renombrar archivos.
 
 Las relaciones son metadatos Markdown normales. `parent` contiene el nombre del archivo padre; las referencias rotas o circulares creadas externamente se muestran para revisión y nunca se reparan silenciosamente:
 

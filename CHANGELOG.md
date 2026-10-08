@@ -8,7 +8,9 @@ All notable changes are documented here. PlainJot follows semantic versioning on
 
 - Actionable task status circles in the sidebar
 - Drag and drop between Inbox, Pending, and Done in Sprint View
-- Horizontal Project Context Map generated from Markdown `project` and `parent` metadata, with connected nodes, downward branches, related-document creation, and safe handling of broken or circular references
+- Freeform Context Map positions with horizontal and vertical automatic layouts
+- Reliable related-document creation from Context Map `+` controls
+- Project Context Map generated from Markdown `project` and `parent` metadata, with connected nodes and safe handling of broken or circular references
 - Shared Idea template and CLI `--parent` support for agent-authored project trees
 - Separate Analyses section and shared Markdown investigation template, with safe note reclassification and CLI analysis filtering
 - Project/type context in the reading header and a keyboard-accessible ⌘P document switcher across projects
