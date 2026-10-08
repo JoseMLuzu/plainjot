@@ -72,6 +72,11 @@ async function setup({ legacyDeveloperMode = false, animationFrames = true, outl
     button.dataset.taskLayout = layout;
     node("#task-view-toggle").append(button);
   }
+  for (const direction of ["horizontal", "vertical"]) {
+    const button = new Element("button");
+    button.dataset.mapDirection = direction;
+    node("#map-layout-toggle").append(button);
+  }
   const sections = ["map", "notes", "analysis", "tasks"].map((section) => {
     const button = new Element("button");
     button.dataset.section = section;
@@ -95,6 +100,7 @@ async function setup({ legacyDeveloperMode = false, animationFrames = true, outl
       getElementById: (id) => nodes.get(`#${id}`) ?? null,
       querySelectorAll: (selector) => selector === ".section-button" ? sections : [],
       createElement: (tag) => new Element(tag),
+      createElementNS: (_namespace, tag) => new Element(tag),
       createTextNode: (text) => ({ text }),
       addEventListener: (name, listener) => documentListeners.set(name, listener),
       documentElement: { dataset: {} },
@@ -685,12 +691,61 @@ test("project map keeps a project's story together and creates related documents
   assert.equal(ui.node("#map-count").textContent, 2);
   assert.equal(ui.node("#project-map-title").textContent, "alpha");
   assert.equal(ui.node("#project-map-tree").querySelectorAll("button").length, 4);
-  ui.run("beginRelatedCreation('idea.md')");
+  const canvas = ui.node("#project-map-tree").children[0];
+  const ideaNode = canvas.children.find((child) => child.dataset.documentId === "idea.md");
+  let stopped = false;
+  ideaNode.children[1].listeners.get("click")({ stopPropagation() { stopped = true; } });
+  assert.equal(stopped, true);
+  assert.equal(ui.node("#create-menu").classList.contains("hidden"), false);
   assert.ok(ui.node("#create-context").textContent.includes("Offline idea"));
   await ui.run("chooseCreation('analysis')");
   assert.equal(ui.posts[0].project, "alpha");
   assert.equal(ui.posts[0].parent, "idea.md");
   assert.equal(ui.posts[0].kind, "analysis");
+});
+
+test("project map can flow downward and keeps freely dragged positions locally", async () => {
+  const ui = await setup();
+  ui.notes[0].id = "roadmap.md";
+  ui.notes[0].title = "Product roadmap";
+  ui.notes[0].project = "alpha";
+  ui.notes[1].id = "idea.md";
+  ui.notes[1].title = "Offline idea";
+  ui.notes[1].project = "alpha";
+  ui.notes[1].parent = "roadmap.md";
+  await ui.run("loadCollections()");
+  await ui.run("changeProject('alpha')");
+
+  let canvas = ui.node("#project-map-tree").children[0];
+  let roadmapNode = canvas.children.find((child) => child.dataset.documentId === "roadmap.md");
+  let ideaNode = canvas.children.find((child) => child.dataset.documentId === "idea.md");
+  assert.ok(parseFloat(ideaNode.style.left) > parseFloat(roadmapNode.style.left));
+  assert.equal(canvas.children[0].children.length, 2);
+
+  ui.run("setMapDirection('vertical')");
+  canvas = ui.node("#project-map-tree").children[0];
+  roadmapNode = canvas.children.find((child) => child.dataset.documentId === "roadmap.md");
+  ideaNode = canvas.children.find((child) => child.dataset.documentId === "idea.md");
+  assert.ok(parseFloat(ideaNode.style.top) > parseFloat(roadmapNode.style.top));
+  assert.equal(ui.node("#map-layout-toggle").children[1].classList.contains("active"), true);
+
+  const open = ideaNode.children[0];
+  const original = { left: parseFloat(ideaNode.style.left), top: parseFloat(ideaNode.style.top) };
+  open.listeners.get("pointerdown")({ button: 0, pointerId: 7, clientX: 100, clientY: 100 });
+  let prevented = false;
+  open.listeners.get("pointermove")({ pointerId: 7, clientX: 155, clientY: 170, preventDefault() { prevented = true; } });
+  open.listeners.get("pointerup")({ pointerId: 7 });
+  assert.equal(prevented, true);
+  assert.equal(parseFloat(ideaNode.style.left), original.left + 55);
+  assert.equal(parseFloat(ideaNode.style.top), original.top + 70);
+
+  const stored = JSON.parse([...ui.storage.entries()].find(([key]) => key.startsWith("plainjot-map-layout:"))[1]);
+  assert.equal(stored.direction, "vertical");
+  assert.equal(stored.positions["idea.md"].x, original.left + 55);
+  ui.run("renderProjectMap()");
+  canvas = ui.node("#project-map-tree").children[0];
+  ideaNode = canvas.children.find((child) => child.dataset.documentId === "idea.md");
+  assert.equal(parseFloat(ideaNode.style.left), original.left + 55);
 });
 
 test("project map survives broken and circular external relationships", async () => {

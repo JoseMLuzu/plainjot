@@ -128,7 +128,13 @@
               <h2 id="project-map-title">Proyecto</h2>
               <span id="project-map-summary"></span>
             </div>
-            <button id="project-map-create" class="primary-button" type="button">＋ Crear raíz</button>
+            <div class="project-map-actions">
+              <div id="map-layout-toggle" class="map-layout-toggle" role="group" aria-label="Dirección automática del mapa">
+                <button class="active" type="button" data-map-direction="horizontal" aria-pressed="true" title="Ordenar de izquierda a derecha">→ Derecha</button>
+                <button type="button" data-map-direction="vertical" aria-pressed="false" title="Ordenar de arriba hacia abajo">↓ Abajo</button>
+              </div>
+              <button id="project-map-create" class="primary-button" type="button">＋ Crear raíz</button>
+            </div>
           </header>
           <div id="project-map-tree" class="project-map-tree"></div>
         </section>

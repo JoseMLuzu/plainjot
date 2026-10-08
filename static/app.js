@@ -68,6 +68,7 @@ const elements = {
   projectMapSummary: document.querySelector("#project-map-summary"),
   projectMapTree: document.querySelector("#project-map-tree"),
   projectMapCreate: document.querySelector("#project-map-create"),
+  mapLayoutToggle: document.querySelector("#map-layout-toggle"),
   switcher: document.querySelector("#document-switcher"),
   switcherSearch: document.querySelector("#switcher-search"),
   switcherResults: document.querySelector("#switcher-results"),
@@ -404,43 +405,212 @@ function projectDocuments() {
   return [...state.notes, ...state.tasks].filter((item) => item.project === state.project);
 }
 
-function beginRelatedCreation(parent = "") {
+function beginRelatedCreation(parent = "", event = null) {
+  event?.stopPropagation();
   state.pendingParent = parent;
   if (state.sidebarHidden) setSidebarHidden(false);
   if (!elements.createMenu.classList.contains("hidden")) closeCreateMenu();
   toggleCreateMenu();
 }
 
-function createMapNode(item, byId, children, visited, path = new Set()) {
-  const li = document.createElement("li");
-  const row = document.createElement("div"); row.className = "map-node-row";
-  const open = document.createElement("button"); open.type = "button"; open.className = "map-node-open";
-  const title = document.createElement("strong"); title.textContent = item.title;
-  const type = document.createElement("span"); type.textContent = documentTypeLabel(item);
-  open.append(title, type); open.addEventListener("click", () => openDocumentFromSystem(item.id));
-  const add = document.createElement("button"); add.type = "button"; add.className = "map-node-add";
-  add.textContent = "+"; add.title = "Crear una rama desde este documento"; add.setAttribute("aria-label", `Crear documento relacionado con ${item.title}`);
-  add.addEventListener("click", () => beginRelatedCreation(item.id));
-  row.append(open, add); li.append(row); visited.add(item.id);
+const MAP_PROJECT_ID = "__project__";
+const MAP_NODE_WIDTH = 300;
+const MAP_NODE_HEIGHT = 78;
+const MAP_PROJECT_WIDTH = 210;
 
-  if (item.parent && !byId.has(item.parent)) {
-    const warning = document.createElement("span"); warning.className = "map-node-warning";
-    warning.textContent = `Referencia no encontrada: ${item.parent}`; li.append(warning);
-  }
-  const nextPath = new Set(path); nextPath.add(item.id);
-  const childItems = children.get(item.id) || [];
-  if (childItems.length) {
-    li.classList.add("has-children");
-    const list = document.createElement("ul");
-    for (const child of childItems) {
-      if (nextPath.has(child.id)) {
-        const cycle = document.createElement("li"); cycle.className = "map-node-warning";
-        cycle.textContent = `Relación circular con ${child.title}`; list.append(cycle); visited.add(child.id);
-      } else list.append(createMapNode(child, byId, children, visited, nextPath));
+function mapLayoutKey() {
+  return `plainjot-map-layout:${state.folder?.path || "default"}:${state.project}`;
+}
+
+function readMapLayout() {
+  try {
+    const value = JSON.parse(localStorage.getItem(mapLayoutKey()) || "null");
+    const direction = ["horizontal", "vertical"].includes(value?.direction) ? value.direction : "horizontal";
+    const positions = {};
+    for (const [id, position] of Object.entries(value?.positions || {})) {
+      if (Number.isFinite(position?.x) && Number.isFinite(position?.y)) {
+        positions[id] = { x: Math.max(12, position.x), y: Math.max(12, position.y) };
+      }
     }
-    li.append(list);
+    return { direction, positions };
+  } catch {
+    return { direction: "horizontal", positions: {} };
   }
-  return li;
+}
+
+function writeMapLayout(direction, positions) {
+  try {
+    localStorage.setItem(mapLayoutKey(), JSON.stringify({ direction, positions }));
+  } catch {
+    showToast("No se pudo guardar la posición del mapa.");
+  }
+}
+
+function mapDepth(item, byId, memo, path = new Set()) {
+  if (memo.has(item.id)) return memo.get(item.id);
+  if (path.has(item.id)) return 0;
+  const parent = byId.get(item.parent);
+  if (!parent) { memo.set(item.id, 0); return 0; }
+  const nextPath = new Set(path); nextPath.add(item.id);
+  const depth = mapDepth(parent, byId, memo, nextPath) + 1;
+  memo.set(item.id, depth);
+  return depth;
+}
+
+function automaticMapPositions(items, direction) {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const memo = new Map();
+  const groups = new Map();
+  const ordered = [...items].sort((a, b) => new Date(b.modified) - new Date(a.modified) || a.title.localeCompare(b.title));
+  for (const item of ordered) {
+    const depth = mapDepth(item, byId, memo);
+    if (!groups.has(depth)) groups.set(depth, []);
+    groups.get(depth).push(item);
+  }
+
+  const positions = {};
+  const roots = groups.get(0) || [];
+  if (direction === "vertical") {
+    positions[MAP_PROJECT_ID] = { x: Math.max(32, ((roots.length - 1) * 320) / 2 + 76), y: 24 };
+    for (const [depth, values] of groups) {
+      values.forEach((item, index) => { positions[item.id] = { x: 28 + index * 320, y: 164 + depth * 138 }; });
+    }
+  } else {
+    positions[MAP_PROJECT_ID] = { x: 24, y: Math.max(28, ((roots.length - 1) * 116) / 2 + 28) };
+    for (const [depth, values] of groups) {
+      values.forEach((item, index) => { positions[item.id] = { x: 290 + depth * 350, y: 24 + index * 116 }; });
+    }
+  }
+  return positions;
+}
+
+function completeMapLayout(items, stored) {
+  const automatic = automaticMapPositions(items, stored.direction);
+  const allowed = new Set([MAP_PROJECT_ID, ...items.map((item) => item.id)]);
+  const positions = {};
+  for (const id of allowed) positions[id] = stored.positions[id] || automatic[id];
+  return { direction: stored.direction, positions };
+}
+
+function mapNodeSize(id) {
+  return { width: id === MAP_PROJECT_ID ? MAP_PROJECT_WIDTH : MAP_NODE_WIDTH, height: MAP_NODE_HEIGHT };
+}
+
+function mapConnectionPath(fromId, toId, positions) {
+  const from = positions[fromId];
+  const to = positions[toId];
+  if (!from || !to) return "";
+  const fromSize = mapNodeSize(fromId);
+  const toSize = mapNodeSize(toId);
+  const fromCenter = { x: from.x + fromSize.width / 2, y: from.y + fromSize.height / 2 };
+  const toCenter = { x: to.x + toSize.width / 2, y: to.y + toSize.height / 2 };
+  const dx = toCenter.x - fromCenter.x;
+  const dy = toCenter.y - fromCenter.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const direction = dx >= 0 ? 1 : -1;
+    const start = { x: fromCenter.x + direction * fromSize.width / 2, y: fromCenter.y };
+    const end = { x: toCenter.x - direction * toSize.width / 2, y: toCenter.y };
+    const bend = Math.max(36, Math.abs(end.x - start.x) / 2);
+    return `M ${start.x} ${start.y} C ${start.x + direction * bend} ${start.y}, ${end.x - direction * bend} ${end.y}, ${end.x} ${end.y}`;
+  }
+  const direction = dy >= 0 ? 1 : -1;
+  const start = { x: fromCenter.x, y: fromCenter.y + direction * fromSize.height / 2 };
+  const end = { x: toCenter.x, y: toCenter.y - direction * toSize.height / 2 };
+  const bend = Math.max(30, Math.abs(end.y - start.y) / 2);
+  return `M ${start.x} ${start.y} C ${start.x} ${start.y + direction * bend}, ${end.x} ${end.y - direction * bend}, ${end.x} ${end.y}`;
+}
+
+function sizeMapCanvas(canvas, svg, positions) {
+  let width = 760;
+  let height = 500;
+  for (const [id, position] of Object.entries(positions)) {
+    const size = mapNodeSize(id);
+    width = Math.max(width, position.x + size.width + 80);
+    height = Math.max(height, position.y + size.height + 80);
+  }
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("width", String(width));
+  svg.setAttribute("height", String(height));
+}
+
+function drawMapConnections(svg, items, positions) {
+  svg.replaceChildren();
+  const byId = new Map(items.map((item) => [item.id, item]));
+  for (const item of items) {
+    const fromId = item.parent && byId.has(item.parent) ? item.parent : MAP_PROJECT_ID;
+    const pathData = mapConnectionPath(fromId, item.id, positions);
+    if (!pathData) continue;
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("class", "map-connection");
+    path.setAttribute("d", pathData);
+    svg.append(path);
+  }
+}
+
+function mapRelationshipWarning(item, byId) {
+  if (item.parent && !byId.has(item.parent)) return `Referencia no encontrada: ${item.parent}`;
+  const visited = new Set([item.id]);
+  let current = item.parent;
+  while (current && byId.has(current)) {
+    if (visited.has(current)) return "Relación circular detectada";
+    visited.add(current);
+    current = byId.get(current).parent;
+  }
+  return "";
+}
+
+function positionMapElement(element, position) {
+  element.style.left = `${position.x}px`;
+  element.style.top = `${position.y}px`;
+}
+
+function enableMapDrag(handle, element, id, direction, positions, items, canvas, svg, onOpen = null) {
+  let gesture = null;
+  let suppressClickUntil = 0;
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    const position = positions[id];
+    gesture = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: position.x, top: position.y, moved: false };
+    handle.setPointerCapture?.(event.pointerId);
+    element.classList.add("drag-ready");
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const dx = event.clientX - gesture.x;
+    const dy = event.clientY - gesture.y;
+    if (!gesture.moved && Math.hypot(dx, dy) < 4) return;
+    gesture.moved = true;
+    event.preventDefault?.();
+    positions[id] = { x: Math.max(12, gesture.left + dx), y: Math.max(12, gesture.top + dy) };
+    positionMapElement(element, positions[id]);
+    element.classList.add("dragging");
+    sizeMapCanvas(canvas, svg, positions);
+    drawMapConnections(svg, items, positions);
+  });
+  const finish = (event) => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    if (gesture.moved) {
+      suppressClickUntil = Date.now() + 300;
+      writeMapLayout(direction, positions);
+    }
+    handle.releasePointerCapture?.(event.pointerId);
+    element.classList.remove("drag-ready", "dragging");
+    gesture = null;
+  };
+  handle.addEventListener("pointerup", finish);
+  handle.addEventListener("pointercancel", finish);
+  if (onOpen) handle.addEventListener("click", () => {
+    if (Date.now() >= suppressClickUntil) onOpen();
+  });
+}
+
+function setMapDirection(direction) {
+  if (!["horizontal", "vertical"].includes(direction) || !state.project) return;
+  const positions = automaticMapPositions(projectDocuments(), direction);
+  writeMapLayout(direction, positions);
+  renderProjectMap();
 }
 
 function renderProjectMap() {
@@ -456,28 +626,46 @@ function renderProjectMap() {
     elements.projectMapTree.append(empty); return;
   }
   const byId = new Map(items.map((item) => [item.id, item]));
-  const children = new Map();
-  for (const item of items) {
-    if (!item.parent || !byId.has(item.parent)) continue;
-    if (!children.has(item.parent)) children.set(item.parent, []);
-    children.get(item.parent).push(item);
-  }
-  const order = (a, b) => new Date(b.modified) - new Date(a.modified);
-  for (const values of children.values()) values.sort(order);
-  const roots = items.filter((item) => !item.parent || !byId.has(item.parent)).sort(order);
-  const flow = document.createElement("div"); flow.className = "project-tree-flow";
+  const layout = completeMapLayout(items, readMapLayout());
+  elements.mapLayoutToggle.querySelectorAll("button").forEach((button) => {
+    const active = button.dataset.mapDirection === layout.direction;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const canvas = document.createElement("div"); canvas.className = "project-map-canvas";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "map-connections");
   const projectRoot = document.createElement("div"); projectRoot.className = "map-project-root";
   const projectTitle = document.createElement("strong"); projectTitle.textContent = state.project;
-  const projectType = document.createElement("span"); projectType.textContent = "Proyecto";
+  const projectType = document.createElement("span"); projectType.textContent = "Proyecto · arrastra para mover";
   projectRoot.append(projectTitle, projectType);
-  const tree = document.createElement("ul"); tree.className = "project-tree";
-  const visited = new Set();
-  for (const root of roots) tree.append(createMapNode(root, byId, children, visited));
-  for (const item of [...items].sort(order)) {
-    if (!visited.has(item.id)) tree.append(createMapNode(item, byId, children, visited));
+  projectRoot.setAttribute("aria-label", `Proyecto ${state.project}. Arrastra para mover.`);
+  positionMapElement(projectRoot, layout.positions[MAP_PROJECT_ID]);
+  enableMapDrag(projectRoot, projectRoot, MAP_PROJECT_ID, layout.direction, layout.positions, items, canvas, svg);
+  canvas.append(svg, projectRoot);
+
+  for (const item of items) {
+    const row = document.createElement("div"); row.className = "map-node-row"; row.dataset.documentId = item.id;
+    positionMapElement(row, layout.positions[item.id]);
+    const open = document.createElement("button"); open.type = "button"; open.className = "map-node-open";
+    open.setAttribute("aria-label", `Abrir ${item.title}. Arrastra para mover.`);
+    const title = document.createElement("strong"); title.textContent = item.title;
+    const type = document.createElement("span"); type.textContent = `${documentTypeLabel(item)} · arrastra para mover`;
+    open.append(title, type);
+    enableMapDrag(open, row, item.id, layout.direction, layout.positions, items, canvas, svg, () => openDocumentFromSystem(item.id));
+    const add = document.createElement("button"); add.type = "button"; add.className = "map-node-add";
+    add.textContent = "+"; add.title = "Crear una rama desde este documento"; add.setAttribute("aria-label", `Crear documento relacionado con ${item.title}`);
+    add.addEventListener("click", (event) => beginRelatedCreation(item.id, event));
+    row.append(open, add);
+    const warningText = mapRelationshipWarning(item, byId);
+    if (warningText) {
+      const warning = document.createElement("span"); warning.className = "map-node-warning"; warning.textContent = warningText; row.append(warning);
+    }
+    canvas.append(row);
   }
-  flow.append(projectRoot, tree);
-  elements.projectMapTree.append(flow);
+  sizeMapCanvas(canvas, svg, layout.positions);
+  drawMapConnections(svg, items, layout.positions);
+  elements.projectMapTree.append(canvas);
 }
 
 function updateWorkspaceContext() {
@@ -1679,7 +1867,10 @@ elements.switcherToggle.addEventListener("click", openQuickSwitcher);
 elements.switcherClose.addEventListener("click", () => closeQuickSwitcher());
 elements.switcherSearch.addEventListener("input", renderQuickSwitcher);
 elements.switcher.addEventListener("click", (event) => { if (event.target === elements.switcher) closeQuickSwitcher(); });
-elements.projectMapCreate.addEventListener("click", () => beginRelatedCreation());
+elements.projectMapCreate.addEventListener("click", (event) => beginRelatedCreation("", event));
+elements.mapLayoutToggle.querySelectorAll("button").forEach((button) => {
+  button.addEventListener("click", () => setMapDirection(button.dataset.mapDirection));
+});
 elements.preview.addEventListener("click", (event) => {
   const link = event.target.closest("a[data-document-id]");
   if (!link) return;

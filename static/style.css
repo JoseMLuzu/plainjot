@@ -200,26 +200,29 @@ kbd { padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; backg
 .project-map-header p { margin: 0 0 8px; color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .18em; }
 .project-map-header h2 { margin: 0; font: 500 clamp(30px, 4vw, 46px)/1.08 var(--serif); letter-spacing: -.02em; }
 .project-map-header span { display: block; margin-top: 8px; color: var(--muted); font-size: 11px; }
+.project-map-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; }
 .project-map-header .primary-button { flex: 0 0 auto; margin: 0; }
-.project-map-tree { min-width: 100%; width: max-content; margin: 0 auto; }
-.project-tree-flow { display: grid; min-width: max-content; grid-template-columns: 200px max-content; align-items: center; column-gap: 48px; padding: 8px 8px 32px; }
-.map-project-root { position: relative; display: flex; width: 200px; min-height: 78px; flex-direction: column; justify-content: center; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 10px; background: var(--accent-soft); }
-.map-project-root::after { position: absolute; top: 50%; left: 100%; width: 48px; border-top: 1px solid var(--line); content: ""; }
+.map-layout-toggle { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
+.map-layout-toggle button { padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 9px; font-weight: 700; }
+.map-layout-toggle button:hover { color: var(--ink); }
+.map-layout-toggle button.active { background: var(--raised); color: var(--ink); box-shadow: 0 1px 3px rgba(59, 52, 38, .08); }
+.project-map-tree { min-width: 100%; margin: 0 auto; }
+.project-map-canvas { position: relative; min-width: 100%; min-height: 500px; }
+.map-connections { position: absolute; z-index: 0; top: 0; left: 0; overflow: visible; pointer-events: none; }
+.map-connection { fill: none; stroke: var(--line); stroke-linecap: round; stroke-width: 1.25; vector-effect: non-scaling-stroke; }
+.map-project-root { position: absolute; z-index: 1; display: flex; width: 210px; height: 78px; flex-direction: column; justify-content: center; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 10px; background: var(--accent-soft); cursor: grab; user-select: none; touch-action: none; }
 .map-project-root strong { color: var(--ink); font: 500 16px/1.25 var(--serif); }
 .map-project-root span { margin-top: 8px; color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.project-tree, .project-tree ul { position: relative; display: flex; flex-direction: column; gap: 18px; margin: 0; padding: 0 0 0 24px; border-left: 1px solid var(--line); list-style: none; }
-.project-tree li { position: relative; display: grid; grid-template-columns: 260px max-content; align-items: center; column-gap: 48px; margin: 0; }
-.project-tree li::before { position: absolute; top: 50%; left: -24px; width: 24px; border-top: 1px solid var(--line); content: ""; }
-.project-tree li.has-children > .map-node-row::after { position: absolute; top: 50%; left: 100%; width: 48px; border-top: 1px solid var(--line); content: ""; }
-.project-tree li > ul { grid-column: 2; grid-row: 1 / span 2; }
-.map-node-row { position: relative; display: flex; width: 260px; align-items: center; gap: 7px; }
-.map-node-open { display: flex; min-width: 0; min-height: 70px; flex: 1; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; padding: 12px 13px; border: 1px solid var(--line-soft); border-radius: 9px; background: color-mix(in srgb, var(--raised) 72%, transparent); text-align: left; }
+.map-node-row { position: absolute; z-index: 1; display: flex; width: 300px; height: 78px; align-items: center; gap: 7px; }
+.map-node-open { display: flex; min-width: 0; height: 78px; flex: 1; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; padding: 12px 13px; border: 1px solid var(--line-soft); border-radius: 9px; background: color-mix(in srgb, var(--raised) 94%, transparent); cursor: grab; text-align: left; box-shadow: 0 5px 18px rgba(59, 52, 38, .035); touch-action: none; user-select: none; }
 .map-node-open:hover { border-color: var(--line); background: var(--raised); }
 .map-node-open strong { display: -webkit-box; overflow: hidden; color: var(--ink); font-size: 12px; font-weight: 650; line-height: 1.35; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .map-node-open span { color: var(--muted); font-size: 9px; }
 .map-node-add { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); font-size: 16px; }
 .map-node-add:hover { border-color: var(--line); background: var(--raised); color: var(--accent); }
-.map-node-warning { display: block; grid-column: 1; margin: 5px 0 0 13px; color: var(--danger); font-size: 9px; }
+.map-node-row.drag-ready, .map-project-root.drag-ready { z-index: 3; }
+.map-node-row.dragging .map-node-open, .map-project-root.dragging { cursor: grabbing; opacity: .82; box-shadow: var(--shadow); }
+.map-node-warning { position: absolute; top: calc(100% + 5px); left: 13px; display: block; color: var(--danger); font-size: 9px; }
 .project-map-empty { max-width: 500px; margin: 70px auto; color: var(--muted); font: 15px/1.6 var(--serif); text-align: center; }
 
 .empty-state { position: relative; z-index: 1; display: flex; height: 100%; align-items: center; justify-content: center; flex-direction: column; padding: 80px 28px 40px; text-align: center; }
@@ -382,14 +385,7 @@ kbd { padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; backg
   .sprint-columns { min-width: 600px; }
   .project-map { padding: 66px 20px 30px; }
   .project-map-header { align-items: flex-start; flex-direction: column; gap: 16px; }
-  .project-tree-flow { grid-template-columns: 170px max-content; column-gap: 32px; }
-  .map-project-root { width: 170px; }
-  .map-project-root::after { width: 32px; }
-  .project-tree, .project-tree ul { gap: 13px; padding-left: 16px; }
-  .project-tree li { grid-template-columns: 220px max-content; column-gap: 32px; }
-  .project-tree li::before { left: -16px; width: 16px; }
-  .project-tree li.has-children > .map-node-row::after { width: 32px; }
-  .map-node-row { width: 220px; }
+  .project-map-actions { width: 100%; justify-content: space-between; }
   .empty-illustration { transform: scale(.82); margin-bottom: 12px; }
   .empty-state h2 { font-size: 36px; }
   .empty-copy { font-size: 14px; }
